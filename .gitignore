@@ -361,3 +361,27 @@ cmake-build-release/
 
 # Assets
 models/**
+
+# Build
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# Visual Studio
+.vs/
+*.vcxproj*
+*.sln
+*.user
+*.log
+
+# Binaries
+*.exe
+*.dll
+*.lib
+*.pdb
+
+# OS
+.DS_Store
+Thumbs.db
