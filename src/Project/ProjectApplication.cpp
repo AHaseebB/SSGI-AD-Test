@@ -2,18 +2,13 @@
 #include <cgltf.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
-
 #include <Project/ProjectApplication.hpp>
-
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
-
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat4x4.hpp>
-
 #include <spdlog/spdlog.h>
-
 #include <unordered_map>
 #include <filesystem>
 #include <algorithm>
@@ -22,13 +17,27 @@
 #include <vector>
 #include <queue>
 #include <set>
+#include <Project/Camera.hpp>
 
+/**
 static std::string Slurp(std::string_view path)
 {
     std::ifstream file(path.data(), std::ios::ate);
     std::string result(file.tellg(), '\0');
     file.seekg(0);
     file.read((char*)result.data(), result.size());
+    return result;
+}
+**/
+static std::string Slurp(std::string_view path)
+{
+    std::ifstream file(path.data(), std::ios::binary | std::ios::ate);
+    if (!file) return {};
+    std::streamsize size = file.tellg();
+    if (size <= 0) return {};
+    std::string result(size, '\0');
+    file.seekg(0);
+    file.read(result.data(), size);
     return result;
 }
 
@@ -68,6 +77,8 @@ void ProjectApplication::BeforeDestroyUiContext()
 {
 }
 
+
+
 bool ProjectApplication::Load()
 {
     if (!Application::Load())
@@ -76,12 +87,44 @@ bool ProjectApplication::Load()
         return false;
     }
 
+    _camera.Set(
+        glm::vec3(-5.0f, 2.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f));
+
+    int framebufferWidth = 1920;
+    int framebufferHeight = 1080;
+    if (GLFWwindow* window = glfwGetCurrentContext())
+    {
+        glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+    }
+
+    _windowWidth = framebufferWidth;
+    _windowHeight = framebufferHeight;
+
+    _camera.SetPerspectiveMatrix(glm::perspective(
+        glm::radians(80.0f),
+        static_cast<float>(_windowWidth) / static_cast<float>(_windowHeight),
+        0.1f,
+        1000.0f));
+
+    _camera.SetOrthographicMatrix(glm::ortho(
+        -10.0f, 10.0f,
+        -10.0f, 10.0f,
+        0.1f, 1000.0f));
+
+    if (GLFWwindow* window = glfwGetCurrentContext())
+    {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
+
     if (!MakeShader("./data/shaders/main.vs.glsl", "./data/shaders/main.fs.glsl"))
     {
         return false;
     }
 
-    LoadModel("./data/models/SM_Deccer_Cubes_Textured.gltf");
+    //LoadModel("./data/models/SM_Deccer_Cubes_Textured.gltf");
+    LoadModel("./data/models/Sponza/Sponza.gltf");
 
     return true;
 }
@@ -93,21 +136,139 @@ void ProjectApplication::Update(float deltaTime)
         Close();
     }
 
+    const bool fDown = IsKeyPressed(GLFW_KEY_F);
+    if (fDown && !_fKeyWasDown)
+    {
+        _freecamEnabled = !_freecamEnabled;
+
+        if (GLFWwindow* window = glfwGetCurrentContext())
+        {
+            glfwSetInputMode(
+                window,
+                GLFW_CURSOR,
+                _freecamEnabled ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        }
+
+        _camera.ResetMouseTracking();
+    }
+    _fKeyWasDown = fDown;
+
+    if (_freecamEnabled)
+    {
+        _camera.RespondToMouseMovement();
+
+        const float movement = _camera.GetSpeed() * deltaTime;
+
+        if (IsKeyPressed(GLFW_KEY_W))
+        {
+            _camera.Advance(movement);
+        }
+        if (IsKeyPressed(GLFW_KEY_S))
+        {
+            _camera.Advance(-movement);
+        }
+        if (IsKeyPressed(GLFW_KEY_A))
+        {
+            _camera.Strafe(-movement);
+        }
+        if (IsKeyPressed(GLFW_KEY_D))
+        {
+            _camera.Strafe(movement);
+        }
+        if (IsKeyPressed(GLFW_KEY_SPACE))
+        {
+            _camera.MoveVertical(movement);
+        }
+        if (IsKeyPressed(GLFW_KEY_LEFT_CONTROL))
+        {
+            _camera.MoveVertical(-movement);
+        }
+
+        if (IsKeyPressed(GLFW_KEY_Q))
+        {
+            _camera.ChangeSpeed(1.0f);
+        }
+        else if (IsKeyPressed(GLFW_KEY_LEFT_SHIFT))
+        {
+            _camera.ChangeSpeed(8.0f);
+        }
+        else
+        {
+            _camera.ChangeSpeed(2.5f);
+        }
+    }
+
     _elapsedTime += deltaTime;
+}
+
+void ProjectApplication::OnFramebufferResized(int width, int height)
+{
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    _windowWidth = width;
+    _windowHeight = height;
+
+    _camera.SetPerspectiveMatrix(glm::perspective(
+        glm::radians(80.0f),
+        static_cast<float>(width) / static_cast<float>(height),
+        0.1f,
+        1000.0f));
 }
 
 void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
 {
-    const auto projection = glm::perspective(glm::radians(80.0f), 1920.0f / 1080.0f, 0.1f, 256.0f);
+    /*
+    const auto projection = glm::perspective(glm::radians(80.0f), 1280.0f / 720.0f, 0.1f, 1000.0f);
     const auto view = glm::lookAt(
         glm::vec3(3 * std::cos(glfwGetTime() / 4), 2, -3 * std::sin(glfwGetTime() / 4)),
         glm::vec3(0, 0, 0),
         glm::vec3(0, 1, 0));
+    */
+    const auto& projection = _camera.GetPerspectiveMatrix();
+    const auto view = _camera.GetViewMatrix();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glUseProgram(_shaderProgram);
     glUniformMatrix4fv(0, 1, false, glm::value_ptr(projection));
     glUniformMatrix4fv(1, 1, false, glm::value_ptr(view));
+    const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
+    const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
+    const float ambientStrength = 0.2f;
+    glUniform3fv(18, 1, glm::value_ptr(lightDirection));
+    glUniform3fv(19, 1, glm::value_ptr(lightColor));
+    glUniform1f(20, ambientStrength);
 
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _cubes.TransformData);
+    glBindVertexArray(_cubes.InputLayout);
+
+    for (const auto& batch : _renderBatches)
+    {
+        if (batch.Commands.empty())
+        {
+            continue;
+        }
+
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, batch.ObjectDataBuffer);
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, batch.CommandBuffer);
+
+        for (uint32_t offset = 0; offset < batch.TextureHandles.size(); ++offset)
+        {
+            glUniform1i(2 + offset, offset);
+            glActiveTexture(GL_TEXTURE0 + offset);
+            glBindTexture(GL_TEXTURE_2D, batch.TextureHandles[offset]);
+        }
+
+        glMultiDrawElementsIndirect(
+            GL_TRIANGLES,
+            GL_UNSIGNED_INT,
+            nullptr,
+            static_cast<GLsizei>(batch.Commands.size()),
+            sizeof(MeshIndirectInfo));
+    }
+
+    /*
     struct ObjectData
     {
         uint32_t transformIndex;
@@ -180,19 +341,68 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
             sizeof(MeshIndirectInfo));
         index++;
     }
+    */
 }
 
 void ProjectApplication::RenderUI(float deltaTime)
 {
+    _fpsTimer += deltaTime;
+    _fpsAccumulatedTime += deltaTime;
+    _fpsFrameCount++;
+
+    if (_fpsTimer >= 0.5f)
+    {
+        _cachedFPS = (deltaTime > 0.0f) ? (1.0f / deltaTime) : 0.0f;
+        _cachedFrameTimeMs = deltaTime * 1000.0f;
+
+        if (_fpsAccumulatedTime > 0.0f)
+        {
+            _cachedAverageFPS = static_cast<float>(_fpsFrameCount) / _fpsAccumulatedTime;
+        }
+        else
+        {
+            _cachedAverageFPS = 0.0f;
+        }
+
+        _fpsTimer = 0.0f;
+        _fpsAccumulatedTime = 0.0f;
+        _fpsFrameCount = 0;
+    }
+
     ImGui::Begin("Window");
     {
         ImGui::TextUnformatted("Hello World!");
         ImGui::Text("Time in seconds since startup: %f", _elapsedTime);
         ImGui::Text("The delta time between frames: %f", deltaTime);
+    
+        const glm::vec3 pos = _camera.GetPosition();
+        const glm::vec3 view = _camera.GetView();
+        const glm::vec3 forward = _camera.GetForward();
+        const glm::vec3 up = _camera.GetUpVector();
+        const glm::vec3 right = _camera.GetStrafeVector();
+
+        ImGui::Text("Position:  %.3f  %.3f  %.3f", pos.x, pos.y, pos.z);
+        ImGui::Text("View:      %.3f  %.3f  %.3f", view.x, view.y, view.z);
+        ImGui::Text("Forward:   %.3f  %.3f  %.3f", forward.x, forward.y, forward.z);
+        ImGui::Text("Up:        %.3f  %.3f  %.3f", up.x, up.y, up.z);
+        ImGui::Text("Right:     %.3f  %.3f  %.3f", right.x, right.y, right.z);
+        ImGui::Separator();
+        ImGui::Text("Speed: %.3f", _camera.GetSpeed());
+        ImGui::Text("Freecam (press F key to toggle): %s", _freecamEnabled ? "ON" : "OFF");
+		ImGui::SetWindowPos(ImVec2(0, 0));
+
+        ImGui::Separator();
+        ImGui::Text("Frame Time: %.3f ms", _cachedFrameTimeMs);
+        ImGui::Text("FPS: %.1f", _cachedFPS);
+        ImGui::Text("Average FPS (0.5s): %.1f", _cachedAverageFPS);
         ImGui::End();
     }
-
-    ImGui::ShowDemoWindow();
+    glm::vec3 pos = _camera.GetPosition();
+    if (ImGui::DragFloat3("Position", &pos.x, 0.1f))
+    {
+        _camera.Set(pos, pos + _camera.GetForward(), _camera.GetUpVector());
+    }
+    //ImGui::ShowDemoWindow();
 }
 
 bool ProjectApplication::MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath)
@@ -245,7 +455,7 @@ bool ProjectApplication::MakeShader(std::string_view vertexShaderFilePath, std::
 }
 
 void ProjectApplication::LoadModel(std::string_view file)
-{
+{   
     // Read GLTF
     cgltf_options options = {};
     cgltf_data* model = nullptr;
@@ -260,6 +470,7 @@ void ProjectApplication::LoadModel(std::string_view file)
     for (uint32_t i = 0; i < model->materials_count; ++i)
     {
         const auto& material = model->materials[i];
+        
         if (material.has_pbr_metallic_roughness && material.pbr_metallic_roughness.base_color_texture.texture != nullptr)
         {
             const auto* image = material.pbr_metallic_roughness.base_color_texture.texture->image;
@@ -437,16 +648,22 @@ void ProjectApplication::LoadModel(std::string_view file)
             }
         }
     }
-    _cubes.Commands.resize(maxBatches);
-    _cubes.ObjectData.resize(maxBatches);
+    //_cubes.Commands.resize(maxBatches);
+    //_cubes.ObjectData.resize(maxBatches);
 
     // Allocate GL buffers
     glCreateVertexArrays(1, &_cubes.InputLayout);
     glCreateBuffers(1, &_cubes.VertexBuffer);
     glCreateBuffers(1, &_cubes.IndexBuffer);
     glCreateBuffers(1, &_cubes.TransformData);
-    glGenBuffers(_cubes.Commands.size(), _cubes.Commands.data());
-    glCreateBuffers(_cubes.ObjectData.size(), _cubes.ObjectData.data());
+    //glGenBuffers(_cubes.Commands.size(), _cubes.Commands.data());
+    //glCreateBuffers(_cubes.ObjectData.size(), _cubes.ObjectData.data());
+
+    glNamedBufferData(
+        _cubes.TransformData,
+        _cubes.Transforms.size() * sizeof(glm::mat4),
+        _cubes.Transforms.data(),
+        GL_STATIC_DRAW);
 
     size_t vertexSize = 0;
     size_t indexSize = 0;
@@ -500,5 +717,51 @@ void ProjectApplication::LoadModel(std::string_view file)
             info.BaseColorTexture,
             info.NormalTexture
         });
+    }
+
+    _renderBatches.clear();
+    _renderBatches.resize(_cubes.Textures.size() / 16 + 1);
+
+    std::vector<std::set<uint32_t>> textureSets(_renderBatches.size());
+
+    for (const auto& mesh : _cubes.Meshes)
+    {
+        const uint32_t batchIndex = mesh.BaseColorTexture / 16;
+
+        _renderBatches[batchIndex].Commands.emplace_back(MeshIndirectInfo{
+            mesh.IndexCount,
+            1,
+            mesh.indexOffset,
+            mesh.VertexOffset,
+            1
+            });
+
+        _renderBatches[batchIndex].Objects.emplace_back(RenderObjectData{
+            mesh.TransformIndex,
+            mesh.BaseColorTexture % 16,
+            mesh.NormalTexture
+            });
+
+        textureSets[batchIndex].insert(_cubes.Textures[mesh.BaseColorTexture]);
+    }
+
+    for (size_t i = 0; i < _renderBatches.size(); ++i)
+    {
+        auto& batch = _renderBatches[i];
+        batch.TextureHandles.assign(textureSets[i].begin(), textureSets[i].end());
+
+        glCreateBuffers(1, &batch.ObjectDataBuffer);
+        glNamedBufferData(
+            batch.ObjectDataBuffer,
+            batch.Objects.size() * sizeof(RenderObjectData),
+            batch.Objects.data(),
+            GL_STATIC_DRAW);
+
+        glCreateBuffers(1, &batch.CommandBuffer);
+        glNamedBufferData(
+            batch.CommandBuffer,
+            batch.Commands.size() * sizeof(MeshIndirectInfo),
+            batch.Commands.data(),
+            GL_STATIC_DRAW);
     }
 }

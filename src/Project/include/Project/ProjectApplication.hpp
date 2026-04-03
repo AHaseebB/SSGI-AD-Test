@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 #include <memory>
+#include <Project/Camera.hpp>
 
 struct Vertex
 {
@@ -50,6 +51,7 @@ struct Mesh
     uint32_t TransformIndex = 0;
     uint32_t BaseColorTexture = 0;
     uint32_t NormalTexture = 0;
+    //uint32_t MaterialIndex;
 };
 
 struct Model
@@ -60,9 +62,26 @@ struct Model
     uint32_t InputLayout;
     uint32_t VertexBuffer;
     uint32_t IndexBuffer;
-    std::vector<uint32_t> Commands;
-    std::vector<uint32_t> ObjectData;
+    //std::vector<uint32_t> Commands;
+    //std::vector<uint32_t> ObjectData;
     uint32_t TransformData;
+};
+
+struct RenderObjectData
+{
+    uint32_t TransformIndex;
+    uint32_t BaseColorIndex;
+    uint32_t NormalIndex;
+};
+
+struct RenderBatch
+{
+    std::vector<RenderObjectData> Objects;
+    std::vector<MeshIndirectInfo> Commands;
+    std::vector<uint32_t> TextureHandles;
+
+    uint32_t ObjectDataBuffer = 0;
+    uint32_t CommandBuffer = 0;
 };
 
 class ProjectApplication final : public Application
@@ -78,9 +97,24 @@ protected:
 private:
     Model _cubes;
     uint32_t _shaderProgram;
+    Camera _camera;
 
+    bool _freecamEnabled = true;
+    int _windowWidth = 1920;
+    int _windowHeight = 1080;
+    bool _fKeyWasDown = false;
     float _elapsedTime = 0.0f;
+    float _fpsTimer = 0.0f;
+    float _fpsAccumulatedTime = 0.0f;
+    uint32_t _fpsFrameCount = 0;
+    float _cachedFPS = 0.0f;
+    float _cachedAverageFPS = 0.0f;
+    float _cachedFrameTimeMs = 0.0f;
 
     bool MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath);
     void LoadModel(std::string_view filePath);
+    std::vector<RenderBatch> _renderBatches;
+
+public:
+    void OnFramebufferResized(int width, int height) override;
 };

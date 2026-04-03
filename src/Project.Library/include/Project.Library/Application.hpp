@@ -7,13 +7,13 @@ class Application
 {
 public:
     void Run();
+    virtual void OnFramebufferResized(int width, int height);
 
 protected:
     void Close();
     bool IsKeyPressed(int32_t key);
     
     double GetDeltaTime();
-
     virtual void AfterCreatedUiContext();
     virtual void BeforeDestroyUiContext();
     virtual bool Initialize();

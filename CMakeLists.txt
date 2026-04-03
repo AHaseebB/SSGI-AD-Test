@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.14)
 
 project(Project)
+add_compile_definitions(_CRT_SECURE_NO_WARNINGS
+_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING)
 
 set(CMAKE_CXX_STANDARD 20)
 

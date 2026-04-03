@@ -6,12 +6,20 @@
 #include <imgui.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_glfw.h>
-
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyOpenGL.hpp>
-
 #include <iostream>
 #include <string>
+
+static void FramebufferSizeCallback(GLFWwindow* window, int width, int height)
+{
+    glViewport(0, 0, width, height);
+
+    if (auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window)))
+    {
+        app->OnFramebufferResized(width, height);
+    }
+}
 
 void Application::Run()
 {
@@ -71,18 +79,16 @@ bool Application::Initialize()
     glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 
-    const auto primaryMonitor = glfwGetPrimaryMonitor();
-    const auto primaryMonitorVideoMode = glfwGetVideoMode(primaryMonitor);
-
     constexpr int windowWidth = 1920;
     constexpr int windowHeight = 1080;
 
-    _windowHandle = glfwCreateWindow(windowWidth, windowHeight, "Project Template", nullptr, nullptr);
+    _windowHandle = glfwCreateWindow(windowWidth, windowHeight, "SSGI", nullptr, nullptr);
     if (_windowHandle == nullptr)
     {
         spdlog::error("Glfw: Unable to create window");
@@ -90,12 +96,23 @@ bool Application::Initialize()
         return false;
     }
 
-    const auto screenWidth = primaryMonitorVideoMode->width;
-    const auto screenHeight = primaryMonitorVideoMode->height;
-    glfwSetWindowPos(_windowHandle, screenWidth / 2 - windowWidth / 2, screenHeight / 2 - windowHeight / 2);
-
+    glfwSetWindowUserPointer(_windowHandle, this);
     glfwMakeContextCurrent(_windowHandle);
-    gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    {
+        spdlog::error("Glad: Unable to initialize");
+        glfwDestroyWindow(_windowHandle);
+        glfwTerminate();
+        return false;
+    }
+
+    glfwSetFramebufferSizeCallback(_windowHandle, FramebufferSizeCallback);
+
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(_windowHandle, &framebufferWidth, &framebufferHeight);
+    glViewport(0, 0, framebufferWidth, framebufferHeight);
 
     ImGui::CreateContext();
     AfterCreatedUiContext();
@@ -125,7 +142,7 @@ bool Application::Load()
     }, nullptr);
     glClearColor(0.05f, 0.02f, 0.07f, 1.0f);
 
-    glfwSwapInterval(1);
+	glfwSwapInterval(0); // Disable VSync (Don't cap FPS to monitor refresh rate)
 
     return true;
 }
@@ -164,12 +181,10 @@ void Application::RenderScene([[maybe_unused]] float dt)
 
 void Application::RenderUI([[maybe_unused]] float dt )
 {
-
 }
 
 void Application::Update([[maybe_unused]] float dt )
 {
-
 }
 
 void Application::AfterCreatedUiContext()
@@ -177,5 +192,9 @@ void Application::AfterCreatedUiContext()
 }
 
 void Application::BeforeDestroyUiContext()
+{
+}
+
+void Application::OnFramebufferResized([[maybe_unused]] int width, [[maybe_unused]] int height)
 {
 }

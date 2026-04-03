@@ -45,7 +45,7 @@ FetchContent_Declare(
 FetchContent_GetProperties(imgui)
 if(NOT imgui_POPULATED)
     message("Fetching imgui")
-    FetchContent_Populate(imgui)
+    FetchContent_MakeAvailable(imgui)
 
     add_library(imgui
         ${imgui_SOURCE_DIR}/imgui.cpp
@@ -89,7 +89,7 @@ FetchContent_Declare(
 )
 FetchContent_GetProperties(cgltf)
 if(NOT cgltf_POPULATED)
-    FetchContent_Populate(cgltf)
+    FetchContent_MakeAvailable(cgltf)
     message("Fetching cgltf")
 
     add_library(cgltf INTERFACE ${cgltf_SOURCE_DIR}/cgltf.h)
@@ -107,7 +107,7 @@ FetchContent_Declare(
 )
 FetchContent_GetProperties(stb_image)
 if(NOT stb_image_POPULATED)
-    FetchContent_Populate(stb_image)
+    FetchContent_MakeAvailable(stb_image)
     message("Fetching stb_image")
 
     add_library(stb_image INTERFACE ${stb_image_SOURCE_DIR}/stb_image.h)
