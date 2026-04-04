@@ -41,6 +41,49 @@ static std::string Slurp(std::string_view path)
     return result;
 }
 
+
+static uint32_t LoadTexture2D(
+    const std::string& texturePath,
+    std::unordered_map<std::string, size_t>& textureIds,
+    std::vector<uint32_t>& textures)
+{
+    if (textureIds.contains(texturePath))
+    {
+        return static_cast<uint32_t>(textureIds[texturePath]);
+    }
+
+    uint32_t texture = 0;
+    glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+
+    glTextureParameteri(texture, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTextureParameteri(texture, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t channels = STBI_rgb_alpha;
+    stbi_uc* textureData = stbi_load(texturePath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+
+    if (!textureData)
+    {
+        spdlog::error("Failed to load texture: {}", texturePath);
+        return 0;
+    }
+
+    const auto levels = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+    glTextureStorage2D(texture, levels, GL_RGBA8, width, height);
+    glTextureSubImage2D(texture, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, textureData);
+    glGenerateTextureMipmap(texture);
+
+    stbi_image_free(textureData);
+
+    textures.emplace_back(texture);
+    uint32_t newIndex = static_cast<uint32_t>(textures.size() - 1);
+    textureIds[texturePath] = newIndex;
+    return newIndex;
+}
+
 namespace fs = std::filesystem;
 
 static std::string FindTexturePath(const fs::path& basePath, const cgltf_image* image)
@@ -77,7 +120,17 @@ void ProjectApplication::BeforeDestroyUiContext()
 {
 }
 
+static uint32_t GetOrAddTextureSlot(RenderBatch& batch, uint32_t globalTextureIndex)
+{
+    auto it = std::find(batch.TextureIndices.begin(), batch.TextureIndices.end(), globalTextureIndex);
+    if (it != batch.TextureIndices.end())
+    {
+        return static_cast<uint32_t>(std::distance(batch.TextureIndices.begin(), it));
+    }
 
+    batch.TextureIndices.push_back(globalTextureIndex);
+    return static_cast<uint32_t>(batch.TextureIndices.size() - 1);
+}
 
 bool ProjectApplication::Load()
 {
@@ -219,7 +272,7 @@ void ProjectApplication::OnFramebufferResized(int width, int height)
 }
 
 void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
-{
+{   
     /*
     const auto projection = glm::perspective(glm::radians(80.0f), 1280.0f / 720.0f, 0.1f, 1000.0f);
     const auto view = glm::lookAt(
@@ -253,11 +306,11 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, batch.ObjectDataBuffer);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, batch.CommandBuffer);
 
-        for (uint32_t offset = 0; offset < batch.TextureHandles.size(); ++offset)
+        for (uint32_t offset = 0; offset < batch.TextureIndices.size(); ++offset)
         {
             glUniform1i(2 + offset, offset);
             glActiveTexture(GL_TEXTURE0 + offset);
-            glBindTexture(GL_TEXTURE_2D, batch.TextureHandles[offset]);
+            glBindTexture(GL_TEXTURE_2D, _cubes.Textures[batch.TextureIndices[offset]]);
         }
 
         glMultiDrawElementsIndirect(
@@ -268,80 +321,6 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
             sizeof(MeshIndirectInfo));
     }
 
-    /*
-    struct ObjectData
-    {
-        uint32_t transformIndex;
-        uint32_t baseColorIndex;
-        uint32_t normalIndex;
-    };
-    struct BatchData
-    {
-        std::vector<ObjectData> objects;
-        std::vector<MeshIndirectInfo> indirectCommands;
-    };
-    std::vector<BatchData> objectBatches(_cubes.Commands.size());
-    std::vector<std::set<uint32_t>> textureHandles(_cubes.Commands.size());
-    for (const auto& mesh : _cubes.Meshes)
-    {
-        const auto index = mesh.BaseColorTexture / 16;
-        objectBatches[index].indirectCommands.emplace_back(MeshIndirectInfo
-        {
-            mesh.IndexCount,
-            1,
-            mesh.indexOffset,
-            mesh.VertexOffset,
-            1
-        });
-        objectBatches[index].objects.emplace_back(ObjectData
-        {
-            mesh.TransformIndex,
-            mesh.BaseColorTexture % 16,
-            mesh.NormalTexture
-        });
-        textureHandles[index].insert(_cubes.Textures[mesh.BaseColorTexture]);
-    }
-
-    glNamedBufferData(
-        _cubes.TransformData,
-        _cubes.Transforms.size() * sizeof(glm::mat4),
-        _cubes.Transforms.data(),
-        GL_DYNAMIC_DRAW);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _cubes.TransformData);
-
-    for (uint32_t index = 0; const auto& batch : objectBatches)
-    {
-        glNamedBufferData(
-            _cubes.ObjectData[index],
-            batch.objects.size() * sizeof(ObjectData),
-            batch.objects.data(),
-            GL_DYNAMIC_DRAW);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, _cubes.ObjectData[index]);
-
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, _cubes.Commands[index]);
-        glNamedBufferData(
-            _cubes.Commands[index],
-            batch.indirectCommands.size() * sizeof(MeshIndirectInfo),
-            batch.indirectCommands.data(),
-            GL_DYNAMIC_DRAW);
-
-        for (uint32_t offset = 0; const auto texture : textureHandles[index])
-        {
-            glUniform1i(2 + offset, offset);
-            glActiveTexture(GL_TEXTURE0 + offset);
-            glBindTexture(GL_TEXTURE_2D, texture);
-            offset++;
-        }
-        glBindVertexArray(_cubes.InputLayout);
-        glMultiDrawElementsIndirect(
-            GL_TRIANGLES,
-            GL_UNSIGNED_INT,
-            nullptr,
-            batch.indirectCommands.size(),
-            sizeof(MeshIndirectInfo));
-        index++;
-    }
-    */
 }
 
 void ProjectApplication::RenderUI(float deltaTime)
@@ -466,7 +445,7 @@ void ProjectApplication::LoadModel(std::string_view file)
     const auto basePath = path.parent_path();
     std::unordered_map<std::string, size_t> textureIds;
     _cubes.Textures.reserve(model->materials_count);
-    const uint32_t maxBatches = model->materials_count / 16 + 1;
+    //const uint32_t maxBatches = model->materials_count / 16 + 1;
     for (uint32_t i = 0; i < model->materials_count; ++i)
     {
         const auto& material = model->materials[i];
@@ -498,6 +477,12 @@ void ProjectApplication::LoadModel(std::string_view file)
             stbi_image_free((void*)textureData);
             _cubes.Textures.emplace_back(texture);
             textureIds[texturePath] = _cubes.Textures.size() - 1;
+            /*if (material.normal_texture.texture != nullptr)
+            {
+                const auto* image = material.normal_texture.texture->image;
+                const auto texturePath = FindTexturePath(basePath, image);
+                LoadTexture2D(texturePath, textureIds, _cubes.Textures);
+            }*/
         }
     }
 
@@ -625,14 +610,19 @@ void ProjectApplication::LoadModel(std::string_view file)
                 {
                     baseColorURI = "";
                 }
+                std::string normalURI = "";
+                if (primitive.material && primitive.material->normal_texture.texture != nullptr)
+                {
+                    normalURI = FindTexturePath(basePath, primitive.material->normal_texture.texture->image);
+                }
                 const auto indexCount = indices.size();
                 meshCreateInfos.emplace_back(MeshCreateInfo
                 {
                     std::move(vertices),
                     std::move(indices),
                     transformIndex++,
-                    baseColorURI == "" ? 0 :(uint32_t)textureIds[baseColorURI],
-                    0,
+                    baseColorURI == "" ? 0 : static_cast<uint32_t>(textureIds[baseColorURI]),
+                    normalURI == "" ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[normalURI]),
                     vertexOffset,
                     indexOffset,
                     _cubes.VertexBuffer,
@@ -722,13 +712,14 @@ void ProjectApplication::LoadModel(std::string_view file)
     _renderBatches.clear();
     _renderBatches.resize(_cubes.Textures.size() / 16 + 1);
 
-    std::vector<std::set<uint32_t>> textureSets(_renderBatches.size());
-
     for (const auto& mesh : _cubes.Meshes)
     {
         const uint32_t batchIndex = mesh.BaseColorTexture / 16;
+        auto& batch = _renderBatches[batchIndex];
 
-        _renderBatches[batchIndex].Commands.emplace_back(MeshIndirectInfo{
+        const uint32_t localBaseColorSlot = GetOrAddTextureSlot(batch, mesh.BaseColorTexture);
+
+        batch.Commands.emplace_back(MeshIndirectInfo{
             mesh.IndexCount,
             1,
             mesh.indexOffset,
@@ -736,20 +727,15 @@ void ProjectApplication::LoadModel(std::string_view file)
             1
             });
 
-        _renderBatches[batchIndex].Objects.emplace_back(RenderObjectData{
+        batch.Objects.emplace_back(RenderObjectData{
             mesh.TransformIndex,
-            mesh.BaseColorTexture % 16,
-            mesh.NormalTexture
+            localBaseColorSlot,
+            0xFFFFFFFFu
             });
-
-        textureSets[batchIndex].insert(_cubes.Textures[mesh.BaseColorTexture]);
     }
 
-    for (size_t i = 0; i < _renderBatches.size(); ++i)
+    for (auto& batch : _renderBatches)
     {
-        auto& batch = _renderBatches[i];
-        batch.TextureHandles.assign(textureSets[i].begin(), textureSets[i].end());
-
         glCreateBuffers(1, &batch.ObjectDataBuffer);
         glNamedBufferData(
             batch.ObjectDataBuffer,

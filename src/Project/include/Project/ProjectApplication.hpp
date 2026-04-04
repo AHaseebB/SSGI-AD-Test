@@ -62,8 +62,6 @@ struct Model
     uint32_t InputLayout;
     uint32_t VertexBuffer;
     uint32_t IndexBuffer;
-    //std::vector<uint32_t> Commands;
-    //std::vector<uint32_t> ObjectData;
     uint32_t TransformData;
 };
 
@@ -78,7 +76,7 @@ struct RenderBatch
 {
     std::vector<RenderObjectData> Objects;
     std::vector<MeshIndirectInfo> Commands;
-    std::vector<uint32_t> TextureHandles;
+    std::vector<uint32_t> TextureIndices; // indices into _cubes.Textures
 
     uint32_t ObjectDataBuffer = 0;
     uint32_t CommandBuffer = 0;

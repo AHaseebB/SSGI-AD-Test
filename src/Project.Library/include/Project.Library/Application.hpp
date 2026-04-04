@@ -13,7 +13,7 @@ protected:
     void Close();
     bool IsKeyPressed(int32_t key);
     
-    double GetDeltaTime();
+    //double GetDeltaTime();
     virtual void AfterCreatedUiContext();
     virtual void BeforeDestroyUiContext();
     virtual bool Initialize();
