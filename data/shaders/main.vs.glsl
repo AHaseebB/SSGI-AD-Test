@@ -65,7 +65,10 @@ layout (location = 3) in vec4 iTangent;
 
 layout (location = 0) out vec2 oUvs;
 layout (location = 1) out flat uint oBaseColorIndex;
-layout (location = 2) out vec3 oWorldNormal;
+layout (location = 2) out flat uint oNormalIndex;
+layout (location = 3) out vec3 oWorldNormal;
+layout (location = 4) out vec4 oWorldTangent;
+layout (location = 5) out vec3 oWorldPosition;
 
 layout (location = 0) uniform mat4 uProjection;
 layout (location = 1) uniform mat4 uView;
@@ -92,11 +95,16 @@ void main()
     uint drawId = gl_DrawID;
     mat4 model = transforms[objectData[drawId].transformIndex];
 
+    vec4 worldPos = model * vec4(iPosition, 1.0);
+
     oUvs = iUv;
     oBaseColorIndex = objectData[drawId].baseColorIndex;
+    oNormalIndex = objectData[drawId].normalIndex;
+    oWorldPosition = worldPos.xyz;
 
     mat3 normalMatrix = transpose(inverse(mat3(model)));
     oWorldNormal = normalize(normalMatrix * iNormal);
+    oWorldTangent = vec4(normalize(mat3(model) * iTangent.xyz), iTangent.w);
 
-    gl_Position = uProjection * uView * model * vec4(iPosition, 1.0);
+    gl_Position = uProjection * uView * worldPos;
 }

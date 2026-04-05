@@ -286,12 +286,20 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
     glUseProgram(_shaderProgram);
     glUniformMatrix4fv(0, 1, false, glm::value_ptr(projection));
     glUniformMatrix4fv(1, 1, false, glm::value_ptr(view));
+
     const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
     const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
     const float ambientStrength = 0.2f;
     glUniform3fv(18, 1, glm::value_ptr(lightDirection));
     glUniform3fv(19, 1, glm::value_ptr(lightColor));
     glUniform1f(20, ambientStrength);
+
+    const glm::vec3 cameraPosition = _camera.GetPosition();
+    const float specularStrength = 0.25f;
+    const float shininess = 32.0f;
+    glUniform3fv(21, 1, glm::value_ptr(cameraPosition));
+    glUniform1f(22, specularStrength);
+    glUniform1f(23, shininess);
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _cubes.TransformData);
     glBindVertexArray(_cubes.InputLayout);
@@ -306,7 +314,11 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, batch.ObjectDataBuffer);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, batch.CommandBuffer);
 
-        for (uint32_t offset = 0; offset < batch.TextureIndices.size(); ++offset)
+        const uint32_t boundTextureCount = std::min<uint32_t>(
+            static_cast<uint32_t>(batch.TextureIndices.size()),
+            16u);
+
+        for (uint32_t offset = 0; offset < boundTextureCount; ++offset)
         {
             glUniform1i(2 + offset, offset);
             glActiveTexture(GL_TEXTURE0 + offset);
@@ -319,6 +331,13 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
             nullptr,
             static_cast<GLsizei>(batch.Commands.size()),
             sizeof(MeshIndirectInfo));
+    }
+    for (size_t i = 0; i < _renderBatches.size(); ++i)
+    {
+        if (_renderBatches[i].TextureIndices.size() > 16)
+        {
+            spdlog::warn("Batch {} uses {} textures, exceeding 16 texture units", i, _renderBatches[i].TextureIndices.size());
+        }
     }
 
 }
@@ -477,12 +496,12 @@ void ProjectApplication::LoadModel(std::string_view file)
             stbi_image_free((void*)textureData);
             _cubes.Textures.emplace_back(texture);
             textureIds[texturePath] = _cubes.Textures.size() - 1;
-            /*if (material.normal_texture.texture != nullptr)
+            if (material.normal_texture.texture != nullptr)
             {
                 const auto* image = material.normal_texture.texture->image;
                 const auto texturePath = FindTexturePath(basePath, image);
                 LoadTexture2D(texturePath, textureIds, _cubes.Textures);
-            }*/
+            }
         }
     }
 
@@ -710,16 +729,47 @@ void ProjectApplication::LoadModel(std::string_view file)
     }
 
     _renderBatches.clear();
-    _renderBatches.resize(_cubes.Textures.size() / 16 + 1);
+    _renderBatches.emplace_back();
 
     for (const auto& mesh : _cubes.Meshes)
     {
-        const uint32_t batchIndex = mesh.BaseColorTexture / 16;
-        auto& batch = _renderBatches[batchIndex];
+        auto meshTextureIndices = std::vector<uint32_t>{};
+        meshTextureIndices.push_back(mesh.BaseColorTexture);
 
-        const uint32_t localBaseColorSlot = GetOrAddTextureSlot(batch, mesh.BaseColorTexture);
+        if (mesh.NormalTexture != 0xFFFFFFFFu)
+        {
+            if (std::find(meshTextureIndices.begin(), meshTextureIndices.end(), mesh.NormalTexture) == meshTextureIndices.end())
+            {
+                meshTextureIndices.push_back(mesh.NormalTexture);
+            }
+        }
 
-        batch.Commands.emplace_back(MeshIndirectInfo{
+        RenderBatch* batch = &_renderBatches.back();
+
+        std::vector<uint32_t> candidateTextureList = batch->TextureIndices;
+        for (uint32_t tex : meshTextureIndices)
+        {
+            if (std::find(candidateTextureList.begin(), candidateTextureList.end(), tex) == candidateTextureList.end())
+            {
+                candidateTextureList.push_back(tex);
+            }
+        }
+
+        if (candidateTextureList.size() > 16)
+        {
+            _renderBatches.emplace_back();
+            batch = &_renderBatches.back();
+        }
+
+        const uint32_t localBaseColorSlot = GetOrAddTextureSlot(*batch, mesh.BaseColorTexture);
+
+        uint32_t localNormalSlot = 0xFFFFFFFFu;
+        if (mesh.NormalTexture != 0xFFFFFFFFu)
+        {
+            localNormalSlot = GetOrAddTextureSlot(*batch, mesh.NormalTexture);
+        }
+
+        batch->Commands.emplace_back(MeshIndirectInfo{
             mesh.IndexCount,
             1,
             mesh.indexOffset,
@@ -727,10 +777,10 @@ void ProjectApplication::LoadModel(std::string_view file)
             1
             });
 
-        batch.Objects.emplace_back(RenderObjectData{
+        batch->Objects.emplace_back(RenderObjectData{
             mesh.TransformIndex,
             localBaseColorSlot,
-            0xFFFFFFFFu
+            localNormalSlot
             });
     }
 

@@ -20,12 +20,37 @@ layout (location = 0) out vec4 oPixel;
 
 layout (location = 0) in vec2 iUvs;
 layout (location = 1) in flat uint iBaseColorIndex;
-layout (location = 2) in vec3 iWorldNormal;
+layout (location = 2) in flat uint iNormalIndex;
+layout (location = 3) in vec3 iWorldNormal;
+layout (location = 4) in vec4 iWorldTangent;
+layout (location = 5) in vec3 iWorldPosition;
 
 layout (location = 2) uniform sampler2D uTextures[16];
 layout (location = 18) uniform vec3 uLightDirection;
 layout (location = 19) uniform vec3 uLightColor;
 layout (location = 20) uniform float uAmbientStrength;
+layout (location = 21) uniform vec3 uCameraPosition;
+layout (location = 22) uniform float uSpecularStrength;
+layout (location = 23) uniform float uShininess;
+
+vec3 GetShadedNormal()
+{
+    vec3 N = normalize(iWorldNormal);
+
+    if (iNormalIndex == 0xFFFFFFFFu)
+    {
+        return N;
+    }
+
+    vec3 T = normalize(iWorldTangent.xyz);
+    vec3 B = normalize(cross(N, T) * iWorldTangent.w);
+    mat3 TBN = mat3(T, B, N);
+
+    vec3 normalSample = texture(uTextures[iNormalIndex], iUvs).xyz;
+    normalSample = normalSample * 2.0 - 1.0;
+
+    return normalize(TBN * normalSample);
+}
 
 void main()
 {
@@ -36,15 +61,21 @@ void main()
         discard;
     }
 
-    vec3 N = normalize(iWorldNormal);
+    vec3 N = GetShadedNormal();
     vec3 L = normalize(-uLightDirection);
+    vec3 V = normalize(uCameraPosition - iWorldPosition);
+    vec3 H = normalize(L + V);
 
     float NdotL = max(dot(N, L), 0.0);
+    float NdotH = max(dot(N, H), 0.0);
 
     vec3 ambient = uAmbientStrength * texel.rgb;
     vec3 diffuse = NdotL * uLightColor * texel.rgb;
 
-    vec3 finalColor = ambient + diffuse;
+    float spec = pow(NdotH, uShininess);
+    vec3 specular = uSpecularStrength * spec * uLightColor;
+
+    vec3 finalColor = ambient + diffuse + specular;
 
     oPixel = vec4(finalColor, texel.a);
 }
