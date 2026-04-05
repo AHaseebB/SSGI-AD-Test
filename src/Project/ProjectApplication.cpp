@@ -295,11 +295,7 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
     glUniform1f(20, ambientStrength);
 
     const glm::vec3 cameraPosition = _camera.GetPosition();
-    const float specularStrength = 0.25f;
-    const float shininess = 32.0f;
     glUniform3fv(21, 1, glm::value_ptr(cameraPosition));
-    glUniform1f(22, specularStrength);
-    glUniform1f(23, shininess);
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _cubes.TransformData);
     glBindVertexArray(_cubes.InputLayout);
@@ -502,6 +498,13 @@ void ProjectApplication::LoadModel(std::string_view file)
                 const auto texturePath = FindTexturePath(basePath, image);
                 LoadTexture2D(texturePath, textureIds, _cubes.Textures);
             }
+            if (material.has_pbr_metallic_roughness &&
+                material.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr)
+            {
+                const auto* image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;
+                const auto texturePath = FindTexturePath(basePath, image);
+                LoadTexture2D(texturePath, textureIds, _cubes.Textures);
+            }
         }
     }
 
@@ -634,19 +637,38 @@ void ProjectApplication::LoadModel(std::string_view file)
                 {
                     normalURI = FindTexturePath(basePath, primitive.material->normal_texture.texture->image);
                 }
+                std::string metallicRoughnessURI = "";
+                float metallicFactor = 1.0f;
+                float roughnessFactor = 1.0f;
+
+                if (primitive.material && primitive.material->has_pbr_metallic_roughness)
+                {
+                    metallicFactor = primitive.material->pbr_metallic_roughness.metallic_factor;
+                    roughnessFactor = primitive.material->pbr_metallic_roughness.roughness_factor;
+
+                    if (primitive.material->pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr)
+                    {
+                        metallicRoughnessURI = FindTexturePath(
+                            basePath,
+                            primitive.material->pbr_metallic_roughness.metallic_roughness_texture.texture->image);
+                    }
+                }
                 const auto indexCount = indices.size();
                 meshCreateInfos.emplace_back(MeshCreateInfo
-                {
-                    std::move(vertices),
-                    std::move(indices),
-                    transformIndex++,
-                    baseColorURI == "" ? 0 : static_cast<uint32_t>(textureIds[baseColorURI]),
-                    normalURI == "" ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[normalURI]),
-                    vertexOffset,
-                    indexOffset,
-                    _cubes.VertexBuffer,
-                    _cubes.IndexBuffer
-                });
+                    {
+                        std::move(vertices),
+                        std::move(indices),
+                        transformIndex++,
+                        baseColorURI == "" ? 0 : static_cast<uint32_t>(textureIds[baseColorURI]),
+                        normalURI == "" ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[normalURI]),
+                        metallicRoughnessURI == "" ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[metallicRoughnessURI]),
+                        metallicFactor,
+                        roughnessFactor,
+                        vertexOffset,
+                        indexOffset,
+                        _cubes.VertexBuffer,
+                        _cubes.IndexBuffer
+                    });
                 cgltf_node_transform_world(node, glm::value_ptr(_cubes.Transforms.emplace_back()));
                 vertexOffset += vertexCount * sizeof(Vertex);
                 indexOffset += indexCount * sizeof(uint32_t);
@@ -718,14 +740,17 @@ void ProjectApplication::LoadModel(std::string_view file)
             info.Indices.size() * sizeof(uint32_t),
             info.Indices.data());
         _cubes.Meshes.emplace_back(Mesh
-        {
-            (uint32_t)info.Indices.size(),
-            (int32_t)(info.VertexOffset / sizeof(Vertex)),
-            (uint32_t)(info.IndexOffset / sizeof(uint32_t)),
-            info.TransformIndex,
-            info.BaseColorTexture,
-            info.NormalTexture
-        });
+            {
+                (uint32_t)info.Indices.size(),
+                (int32_t)(info.VertexOffset / sizeof(Vertex)),
+                (uint32_t)(info.IndexOffset / sizeof(uint32_t)),
+                info.TransformIndex,
+                info.BaseColorTexture,
+                info.NormalTexture,
+                info.MetallicRoughnessTexture,
+                info.MetallicFactor,
+                info.RoughnessFactor
+            });
     }
 
     _renderBatches.clear();
@@ -768,6 +793,11 @@ void ProjectApplication::LoadModel(std::string_view file)
         {
             localNormalSlot = GetOrAddTextureSlot(*batch, mesh.NormalTexture);
         }
+        uint32_t localMetallicRoughnessSlot = 0xFFFFFFFFu;
+        if (mesh.MetallicRoughnessTexture != 0xFFFFFFFFu)
+        {
+            localMetallicRoughnessSlot = GetOrAddTextureSlot(*batch, mesh.MetallicRoughnessTexture);
+        }
 
         batch->Commands.emplace_back(MeshIndirectInfo{
             mesh.IndexCount,
@@ -780,7 +810,10 @@ void ProjectApplication::LoadModel(std::string_view file)
         batch->Objects.emplace_back(RenderObjectData{
             mesh.TransformIndex,
             localBaseColorSlot,
-            localNormalSlot
+            localNormalSlot,
+            localMetallicRoughnessSlot,
+            mesh.MetallicFactor,
+            mesh.RoughnessFactor
             });
     }
 

@@ -69,6 +69,9 @@ layout (location = 2) out flat uint oNormalIndex;
 layout (location = 3) out vec3 oWorldNormal;
 layout (location = 4) out vec4 oWorldTangent;
 layout (location = 5) out vec3 oWorldPosition;
+layout (location = 6) out flat uint oMetallicRoughnessIndex;
+layout (location = 7) out flat float oMetallicFactor;
+layout (location = 8) out flat float oRoughnessFactor;
 
 layout (location = 0) uniform mat4 uProjection;
 layout (location = 1) uniform mat4 uView;
@@ -78,6 +81,9 @@ struct ObjectData
     uint transformIndex;
     uint baseColorIndex;
     uint normalIndex;
+    uint metallicRoughnessIndex;
+    float metallicFactor;
+    float roughnessFactor;
 };
 
 layout (binding = 0) readonly buffer BObjectData
@@ -100,6 +106,9 @@ void main()
     oUvs = iUv;
     oBaseColorIndex = objectData[drawId].baseColorIndex;
     oNormalIndex = objectData[drawId].normalIndex;
+    oMetallicRoughnessIndex = objectData[drawId].metallicRoughnessIndex;
+    oMetallicFactor = objectData[drawId].metallicFactor;
+    oRoughnessFactor = objectData[drawId].roughnessFactor;
     oWorldPosition = worldPos.xyz;
 
     mat3 normalMatrix = transpose(inverse(mat3(model)));

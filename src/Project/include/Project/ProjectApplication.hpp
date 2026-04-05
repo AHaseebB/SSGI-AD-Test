@@ -36,6 +36,9 @@ struct MeshCreateInfo
     uint32_t TransformIndex;
     uint32_t BaseColorTexture;
     uint32_t NormalTexture;
+    uint32_t MetallicRoughnessTexture;
+    float MetallicFactor;
+    float RoughnessFactor;
     size_t VertexOffset;
     size_t IndexOffset;
     uint32_t VertexBuffer;
@@ -47,11 +50,12 @@ struct Mesh
     uint32_t IndexCount = 0;
     int32_t VertexOffset = 0;
     uint32_t indexOffset = 0;
-    // NOT OpenGL handles, just indices
     uint32_t TransformIndex = 0;
     uint32_t BaseColorTexture = 0;
     uint32_t NormalTexture = 0;
-    //uint32_t MaterialIndex;
+    uint32_t MetallicRoughnessTexture = 0xFFFFFFFFu;
+    float MetallicFactor = 1.0f;
+    float RoughnessFactor = 1.0f;
 };
 
 struct Model
@@ -70,6 +74,9 @@ struct RenderObjectData
     uint32_t TransformIndex;
     uint32_t BaseColorIndex;
     uint32_t NormalIndex;
+    uint32_t MetallicRoughnessIndex;
+    float MetallicFactor;
+    float RoughnessFactor;
 };
 
 struct RenderBatch
