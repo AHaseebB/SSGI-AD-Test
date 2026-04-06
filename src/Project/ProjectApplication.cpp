@@ -19,16 +19,6 @@
 #include <set>
 #include <Project/Camera.hpp>
 
-/**
-static std::string Slurp(std::string_view path)
-{
-    std::ifstream file(path.data(), std::ios::ate);
-    std::string result(file.tellg(), '\0');
-    file.seekg(0);
-    file.read((char*)result.data(), result.size());
-    return result;
-}
-**/
 static std::string Slurp(std::string_view path)
 {
     std::ifstream file(path.data(), std::ios::binary | std::ios::ate);
@@ -45,11 +35,14 @@ static std::string Slurp(std::string_view path)
 static uint32_t LoadTexture2D(
     const std::string& texturePath,
     std::unordered_map<std::string, size_t>& textureIds,
-    std::vector<uint32_t>& textures)
+    std::vector<uint32_t>& textures,
+    bool srgb)
 {
-    if (textureIds.contains(texturePath))
+    const std::string cacheKey = texturePath + (srgb ? "|srgb" : "|linear");
+
+    if (textureIds.contains(cacheKey))
     {
-        return static_cast<uint32_t>(textureIds[texturePath]);
+        return static_cast<uint32_t>(textureIds[cacheKey]);
     }
 
     uint32_t texture = 0;
@@ -68,19 +61,21 @@ static uint32_t LoadTexture2D(
     if (!textureData)
     {
         spdlog::error("Failed to load texture: {}", texturePath);
-        return 0;
+        return 0xFFFFFFFFu;;
     }
 
     const auto levels = static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
-    glTextureStorage2D(texture, levels, GL_RGBA8, width, height);
+    const GLenum internalFormat = srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+
+    glTextureStorage2D(texture, levels, internalFormat, width, height);
     glTextureSubImage2D(texture, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, textureData);
     glGenerateTextureMipmap(texture);
 
     stbi_image_free(textureData);
 
     textures.emplace_back(texture);
-    uint32_t newIndex = static_cast<uint32_t>(textures.size() - 1);
-    textureIds[texturePath] = newIndex;
+    const uint32_t newIndex = static_cast<uint32_t>(textures.size() - 1);
+    textureIds[cacheKey] = newIndex;
     return newIndex;
 }
 
@@ -94,13 +89,17 @@ static std::string FindTexturePath(const fs::path& basePath, const cgltf_image* 
         auto newPath = basePath / image->name;
         if (!newPath.has_extension())
         {
-            if (std::strcmp(image->mime_type, "image/png") == 0)
+            if (image->mime_type)
             {
-                newPath.replace_extension("png");
-            }
-            else if (std::strcmp(image->mime_type, "image/jpg") == 0)
-            {
-                newPath.replace_extension("jpg");
+                if (std::strcmp(image->mime_type, "image/png") == 0)
+                {
+                    newPath.replace_extension("png");
+                }
+                else if (std::strcmp(image->mime_type, "image/jpg") == 0 ||
+                    std::strcmp(image->mime_type, "image/jpeg") == 0)
+                {
+                    newPath.replace_extension("jpg");
+                }
             }
         }
         texturePath = newPath.generic_string();
@@ -141,8 +140,8 @@ bool ProjectApplication::Load()
     }
 
     _camera.Set(
-        glm::vec3(-5.0f, 2.0f, 0.0f),
-        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(-7.0f, 0.5f, 0.0f),
+        glm::vec3(-5.9f, 1.5f, 1.4f),
         glm::vec3(0.0f, 1.0f, 0.0f));
 
     int framebufferWidth = 1920;
@@ -328,14 +327,6 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
             static_cast<GLsizei>(batch.Commands.size()),
             sizeof(MeshIndirectInfo));
     }
-    for (size_t i = 0; i < _renderBatches.size(); ++i)
-    {
-        if (_renderBatches[i].TextureIndices.size() > 16)
-        {
-            spdlog::warn("Batch {} uses {} textures, exceeding 16 texture units", i, _renderBatches[i].TextureIndices.size());
-        }
-    }
-
 }
 
 void ProjectApplication::RenderUI(float deltaTime)
@@ -389,13 +380,16 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::Text("Frame Time: %.3f ms", _cachedFrameTimeMs);
         ImGui::Text("FPS: %.1f", _cachedFPS);
         ImGui::Text("Average FPS (0.5s): %.1f", _cachedAverageFPS);
+
+        float editablePos[3] = { pos.x, pos.y, pos.z };
+        if (ImGui::DragFloat3("Position", editablePos, 0.1f))
+        {
+            const glm::vec3 newPos(editablePos[0], editablePos[1], editablePos[2]);
+            _camera.Set(newPos, newPos + _camera.GetForward(), _camera.GetUpVector());
+        }
         ImGui::End();
     }
-    glm::vec3 pos = _camera.GetPosition();
-    if (ImGui::DragFloat3("Position", &pos.x, 0.1f))
-    {
-        _camera.Set(pos, pos + _camera.GetForward(), _camera.GetUpVector());
-    }
+    
     //ImGui::ShowDemoWindow();
 }
 
@@ -450,61 +444,72 @@ bool ProjectApplication::MakeShader(std::string_view vertexShaderFilePath, std::
 
 void ProjectApplication::LoadModel(std::string_view file)
 {   
+    _cubes.Meshes.clear();
+    _cubes.Textures.clear();
+    _cubes.Transforms.clear();
+    _renderBatches.clear();
+
     // Read GLTF
     cgltf_options options = {};
     cgltf_data* model = nullptr;
-    cgltf_parse_file(&options, file.data(), &model);
-    cgltf_load_buffers(&options, model, file.data());
 
+    cgltf_result parseResult = cgltf_parse_file(&options, file.data(), &model);
+    if (parseResult != cgltf_result_success || !model)
+    {
+        spdlog::error("Failed to parse glTF: {}", file.data());
+        return;
+    }
+
+    cgltf_result loadResult = cgltf_load_buffers(&options, model, file.data());
+    if (loadResult != cgltf_result_success)
+    {
+        spdlog::error("Failed to load glTF buffers: {}", file.data());
+        cgltf_free(model);
+        return;
+    }
     fs::path path(file.data());
     const auto basePath = path.parent_path();
     std::unordered_map<std::string, size_t> textureIds;
-    _cubes.Textures.reserve(model->materials_count);
-    //const uint32_t maxBatches = model->materials_count / 16 + 1;
+    _cubes.Textures.reserve(model->materials_count * 3);
+    const std::string whitePath = "./data/models/Sponza/white.png";
+    _whiteTextureIndex = LoadTexture2D(
+        whitePath,
+        textureIds,
+        _cubes.Textures,
+        true // base colour to sRGB
+    );
+    
     for (uint32_t i = 0; i < model->materials_count; ++i)
     {
         const auto& material = model->materials[i];
-        
-        if (material.has_pbr_metallic_roughness && material.pbr_metallic_roughness.base_color_texture.texture != nullptr)
+
+        if (material.has_pbr_metallic_roughness &&
+            material.pbr_metallic_roughness.base_color_texture.texture != nullptr)
         {
             const auto* image = material.pbr_metallic_roughness.base_color_texture.texture->image;
             const auto texturePath = FindTexturePath(basePath, image);
-            if (textureIds.contains(texturePath))
-            {
-                continue;
-            }
-            uint32_t texture;
-            glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+            LoadTexture2D(texturePath, textureIds, _cubes.Textures, true);
+        }
 
-            glTextureParameteri(texture, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTextureParameteri(texture, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        if (material.normal_texture.texture != nullptr)
+        {
+            const auto* image = material.normal_texture.texture->image;
+            const auto texturePath = FindTexturePath(basePath, image);
+            LoadTexture2D(texturePath, textureIds, _cubes.Textures, false);
+        }
 
-            int32_t width = 0;
-            int32_t height = 0;
-            int32_t channels = STBI_rgb_alpha;
-            const auto* textureData = stbi_load(texturePath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
-            const auto levels = (uint32_t)std::floor(std::log2(std::max(width, height)));
-            glTextureStorage2D(texture, levels, GL_RGBA8, width, height);
-            glTextureSubImage2D(texture, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, textureData);
-            glGenerateTextureMipmap(texture);
-            stbi_image_free((void*)textureData);
-            _cubes.Textures.emplace_back(texture);
-            textureIds[texturePath] = _cubes.Textures.size() - 1;
-            if (material.normal_texture.texture != nullptr)
-            {
-                const auto* image = material.normal_texture.texture->image;
-                const auto texturePath = FindTexturePath(basePath, image);
-                LoadTexture2D(texturePath, textureIds, _cubes.Textures);
-            }
-            if (material.has_pbr_metallic_roughness &&
-                material.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr)
-            {
-                const auto* image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;
-                const auto texturePath = FindTexturePath(basePath, image);
-                LoadTexture2D(texturePath, textureIds, _cubes.Textures);
-            }
+        if (material.has_pbr_metallic_roughness &&
+            material.pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr)
+        {
+            const auto* image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;
+            const auto texturePath = FindTexturePath(basePath, image);
+            LoadTexture2D(texturePath, textureIds, _cubes.Textures, false);
+        }
+        if (material.occlusion_texture.texture != nullptr)
+        {
+            const auto* image = material.occlusion_texture.texture->image;
+            const auto texturePath = FindTexturePath(basePath, image);
+            LoadTexture2D(texturePath, textureIds, _cubes.Textures, false);
         }
     }
 
@@ -624,7 +629,7 @@ void ProjectApplication::LoadModel(std::string_view file)
                     }
                 }
                 std::string baseColorURI = "";
-                if (primitive.material->pbr_metallic_roughness.base_color_texture.texture != nullptr)
+                if (primitive.material && primitive.material->pbr_metallic_roughness.base_color_texture.texture != nullptr)
                 {
                     baseColorURI = FindTexturePath(basePath, primitive.material->pbr_metallic_roughness.base_color_texture.texture->image);
                 }
@@ -632,36 +637,44 @@ void ProjectApplication::LoadModel(std::string_view file)
                 {
                     baseColorURI = "";
                 }
+
                 std::string normalURI = "";
                 if (primitive.material && primitive.material->normal_texture.texture != nullptr)
                 {
                     normalURI = FindTexturePath(basePath, primitive.material->normal_texture.texture->image);
                 }
+
                 std::string metallicRoughnessURI = "";
                 float metallicFactor = 1.0f;
                 float roughnessFactor = 1.0f;
-
                 if (primitive.material && primitive.material->has_pbr_metallic_roughness)
                 {
                     metallicFactor = primitive.material->pbr_metallic_roughness.metallic_factor;
                     roughnessFactor = primitive.material->pbr_metallic_roughness.roughness_factor;
-
-                    if (primitive.material->pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr)
+					//spdlog::info("1: metallic factor = {}, roughness factor = {}", metallicFactor, roughnessFactor);
+                    if (primitive.material && primitive.material->pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr)
                     {
-                        metallicRoughnessURI = FindTexturePath(
-                            basePath,
-                            primitive.material->pbr_metallic_roughness.metallic_roughness_texture.texture->image);
+                        metallicRoughnessURI = FindTexturePath(basePath, primitive.material->pbr_metallic_roughness.metallic_roughness_texture.texture->image);
+						//spdlog::info("2: metallic-roughness texture: {}", metallicRoughnessURI);
                     }
                 }
+
+                std::string occlusionURI = "";
+                if (primitive.material && primitive.material->occlusion_texture.texture != nullptr)
+                {
+                    occlusionURI = FindTexturePath(basePath, primitive.material->occlusion_texture.texture->image);
+                }
+
                 const auto indexCount = indices.size();
                 meshCreateInfos.emplace_back(MeshCreateInfo
                     {
                         std::move(vertices),
                         std::move(indices),
                         transformIndex++,
-                        baseColorURI == "" ? 0 : static_cast<uint32_t>(textureIds[baseColorURI]),
-                        normalURI == "" ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[normalURI]),
-                        metallicRoughnessURI == "" ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[metallicRoughnessURI]),
+                        baseColorURI.empty() ? _whiteTextureIndex : static_cast<uint32_t>(textureIds[baseColorURI + "|srgb"]),
+                        normalURI.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[normalURI + "|linear"]),
+                        metallicRoughnessURI.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[metallicRoughnessURI + "|linear"]),
+                        occlusionURI.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[occlusionURI + "|linear"]),
                         metallicFactor,
                         roughnessFactor,
                         vertexOffset,
@@ -679,16 +692,12 @@ void ProjectApplication::LoadModel(std::string_view file)
             }
         }
     }
-    //_cubes.Commands.resize(maxBatches);
-    //_cubes.ObjectData.resize(maxBatches);
 
     // Allocate GL buffers
     glCreateVertexArrays(1, &_cubes.InputLayout);
     glCreateBuffers(1, &_cubes.VertexBuffer);
     glCreateBuffers(1, &_cubes.IndexBuffer);
     glCreateBuffers(1, &_cubes.TransformData);
-    //glGenBuffers(_cubes.Commands.size(), _cubes.Commands.data());
-    //glCreateBuffers(_cubes.ObjectData.size(), _cubes.ObjectData.data());
 
     glNamedBufferData(
         _cubes.TransformData,
@@ -748,6 +757,7 @@ void ProjectApplication::LoadModel(std::string_view file)
                 info.BaseColorTexture,
                 info.NormalTexture,
                 info.MetallicRoughnessTexture,
+                info.OcclusionTexture,
                 info.MetallicFactor,
                 info.RoughnessFactor
             });
@@ -766,6 +776,22 @@ void ProjectApplication::LoadModel(std::string_view file)
             if (std::find(meshTextureIndices.begin(), meshTextureIndices.end(), mesh.NormalTexture) == meshTextureIndices.end())
             {
                 meshTextureIndices.push_back(mesh.NormalTexture);
+            }
+        }
+
+        if (mesh.MetallicRoughnessTexture != 0xFFFFFFFFu)
+        {
+            if (std::find(meshTextureIndices.begin(), meshTextureIndices.end(), mesh.MetallicRoughnessTexture) == meshTextureIndices.end())
+            {
+                meshTextureIndices.push_back(mesh.MetallicRoughnessTexture);
+            }
+        }
+
+        if (mesh.OcclusionTexture != 0xFFFFFFFFu)
+        {
+            if (std::find(meshTextureIndices.begin(), meshTextureIndices.end(), mesh.OcclusionTexture) == meshTextureIndices.end())
+            {
+                meshTextureIndices.push_back(mesh.OcclusionTexture);
             }
         }
 
@@ -793,10 +819,17 @@ void ProjectApplication::LoadModel(std::string_view file)
         {
             localNormalSlot = GetOrAddTextureSlot(*batch, mesh.NormalTexture);
         }
+
         uint32_t localMetallicRoughnessSlot = 0xFFFFFFFFu;
         if (mesh.MetallicRoughnessTexture != 0xFFFFFFFFu)
         {
             localMetallicRoughnessSlot = GetOrAddTextureSlot(*batch, mesh.MetallicRoughnessTexture);
+        }
+
+        uint32_t localOcclusionSlot = 0xFFFFFFFFu;
+        if (mesh.OcclusionTexture != 0xFFFFFFFFu)
+        {
+            localOcclusionSlot = GetOrAddTextureSlot(*batch, mesh.OcclusionTexture);
         }
 
         batch->Commands.emplace_back(MeshIndirectInfo{
@@ -812,6 +845,7 @@ void ProjectApplication::LoadModel(std::string_view file)
             localBaseColorSlot,
             localNormalSlot,
             localMetallicRoughnessSlot,
+			localOcclusionSlot,
             mesh.MetallicFactor,
             mesh.RoughnessFactor
             });
@@ -832,5 +866,13 @@ void ProjectApplication::LoadModel(std::string_view file)
             batch.Commands.size() * sizeof(MeshIndirectInfo),
             batch.Commands.data(),
             GL_STATIC_DRAW);
+    }
+
+    for (size_t i = 0; i < _renderBatches.size(); ++i)
+    {
+        if (_renderBatches[i].TextureIndices.size() > 16)
+        {
+            spdlog::warn("Batch {} uses {} textures, exceeding 16 texture units", i, _renderBatches[i].TextureIndices.size());
+        }
     }
 }

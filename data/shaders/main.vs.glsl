@@ -72,6 +72,7 @@ layout (location = 5) out vec3 oWorldPosition;
 layout (location = 6) out flat uint oMetallicRoughnessIndex;
 layout (location = 7) out flat float oMetallicFactor;
 layout (location = 8) out flat float oRoughnessFactor;
+layout (location = 9) out flat uint oOcclusionIndex;
 
 layout (location = 0) uniform mat4 uProjection;
 layout (location = 1) uniform mat4 uView;
@@ -82,6 +83,7 @@ struct ObjectData
     uint baseColorIndex;
     uint normalIndex;
     uint metallicRoughnessIndex;
+    uint occlusionIndex;
     float metallicFactor;
     float roughnessFactor;
 };
@@ -107,6 +109,7 @@ void main()
     oBaseColorIndex = objectData[drawId].baseColorIndex;
     oNormalIndex = objectData[drawId].normalIndex;
     oMetallicRoughnessIndex = objectData[drawId].metallicRoughnessIndex;
+    oOcclusionIndex = objectData[drawId].occlusionIndex;
     oMetallicFactor = objectData[drawId].metallicFactor;
     oRoughnessFactor = objectData[drawId].roughnessFactor;
     oWorldPosition = worldPos.xyz;

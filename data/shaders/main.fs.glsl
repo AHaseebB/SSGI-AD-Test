@@ -27,6 +27,7 @@ layout (location = 5) in vec3 iWorldPosition;
 layout (location = 6) in flat uint iMetallicRoughnessIndex;
 layout (location = 7) in flat float iMetallicFactor;
 layout (location = 8) in flat float iRoughnessFactor;
+layout (location = 9) in flat uint iOcclusionIndex;
 
 layout (location = 2) uniform sampler2D uTextures[16];
 layout (location = 18) uniform vec3 uLightDirection;
@@ -82,7 +83,13 @@ void main()
     float NdotL = max(dot(N, L), 0.0);
     float NdotH = max(dot(N, H), 0.0);
 
-    vec3 ambient = uAmbientStrength * texel.rgb;
+    float occlusion = 0.5;
+    if (iOcclusionIndex != 0xFFFFFFFFu)
+    {
+        occlusion = texture(uTextures[iOcclusionIndex], iUvs).r;
+    }
+
+    vec3 ambient = uAmbientStrength * texel.rgb * occlusion;
     vec3 diffuse = NdotL * uLightColor * texel.rgb;
 
     float spec = pow(NdotH, shininess);

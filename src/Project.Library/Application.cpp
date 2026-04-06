@@ -127,6 +127,7 @@ bool Application::Load()
 {
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEPTH_TEST);
+    glEnable(GL_FRAMEBUFFER_SRGB);
     glDebugMessageCallback([](GLenum source,
                               GLenum type,
                               GLuint,
@@ -162,6 +163,7 @@ void Application::Render(float dt)
     ZoneScopedC(tracy::Color::Red2);
 
     RenderScene(dt);
+    glDisable(GL_FRAMEBUFFER_SRGB);
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -171,7 +173,7 @@ void Application::Render(float dt)
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         ImGui::EndFrame();
     }
-
+    glEnable(GL_FRAMEBUFFER_SRGB);
     glfwSwapBuffers(_windowHandle);
 }
 

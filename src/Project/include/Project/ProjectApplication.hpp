@@ -37,6 +37,7 @@ struct MeshCreateInfo
     uint32_t BaseColorTexture;
     uint32_t NormalTexture;
     uint32_t MetallicRoughnessTexture;
+    uint32_t OcclusionTexture;
     float MetallicFactor;
     float RoughnessFactor;
     size_t VertexOffset;
@@ -54,6 +55,7 @@ struct Mesh
     uint32_t BaseColorTexture = 0;
     uint32_t NormalTexture = 0;
     uint32_t MetallicRoughnessTexture = 0xFFFFFFFFu;
+    uint32_t OcclusionTexture = 0xFFFFFFFFu;
     float MetallicFactor = 1.0f;
     float RoughnessFactor = 1.0f;
 };
@@ -75,6 +77,7 @@ struct RenderObjectData
     uint32_t BaseColorIndex;
     uint32_t NormalIndex;
     uint32_t MetallicRoughnessIndex;
+    uint32_t OcclusionIndex;
     float MetallicFactor;
     float RoughnessFactor;
 };
@@ -119,6 +122,7 @@ private:
     bool MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath);
     void LoadModel(std::string_view filePath);
     std::vector<RenderBatch> _renderBatches;
+    uint32_t _whiteTextureIndex = 0xFFFFFFFFu;
 
 public:
     void OnFramebufferResized(int width, int height) override;
