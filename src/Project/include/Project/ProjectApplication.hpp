@@ -37,7 +37,7 @@ struct MeshCreateInfo
     uint32_t BaseColorTexture;
     uint32_t NormalTexture;
     uint32_t MetallicRoughnessTexture;
-    uint32_t OcclusionTexture;
+    //uint32_t OcclusionTexture;
     float MetallicFactor;
     float RoughnessFactor;
     size_t VertexOffset;
@@ -55,7 +55,7 @@ struct Mesh
     uint32_t BaseColorTexture = 0;
     uint32_t NormalTexture = 0;
     uint32_t MetallicRoughnessTexture = 0xFFFFFFFFu;
-    uint32_t OcclusionTexture = 0xFFFFFFFFu;
+    //uint32_t OcclusionTexture = 0xFFFFFFFFu;
     float MetallicFactor = 1.0f;
     float RoughnessFactor = 1.0f;
 };
@@ -77,7 +77,7 @@ struct RenderObjectData
     uint32_t BaseColorIndex;
     uint32_t NormalIndex;
     uint32_t MetallicRoughnessIndex;
-    uint32_t OcclusionIndex;
+    //uint32_t OcclusionIndex;
     float MetallicFactor;
     float RoughnessFactor;
 };
@@ -101,6 +101,9 @@ protected:
     void RenderScene(float deltaTime) override;
     void RenderUI(float deltaTime) override;
     void Update(float deltaTime) override;
+    void CreateGBuffer(int width, int height);
+    void DestroyGBuffer();
+    void CreateFullscreenTriangle();
 
 private:
     Model _cubes;
@@ -119,10 +122,24 @@ private:
     float _cachedAverageFPS = 0.0f;
     float _cachedFrameTimeMs = 0.0f;
 
-    bool MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath);
+    //bool MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath);
+    uint32_t MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath);
     void LoadModel(std::string_view filePath);
     std::vector<RenderBatch> _renderBatches;
     uint32_t _whiteTextureIndex = 0xFFFFFFFFu;
+
+    uint32_t _gBufferFbo = 0;
+    uint32_t _gAlbedoTexture = 0;
+    uint32_t _gNormalTexture = 0;
+    uint32_t _gMaterialTexture = 0;
+    uint32_t _gDepthTexture = 0;
+
+    uint32_t _geometryProgram = 0;
+	uint32_t _lightingProgram = 0;
+
+    uint32_t _fullscreenVao = 0;
+
+    int _debugView = 0; // 0 = lit, 1 = albedo, 2 = normal, 3 = material, 4 = depth
 
 public:
     void OnFramebufferResized(int width, int height) override;

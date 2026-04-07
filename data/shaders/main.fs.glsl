@@ -98,5 +98,12 @@ void main()
 
     vec3 finalColor = ambient + diffuse + specular;
 
+    /*if (iMetallicRoughnessIndex == 0xFFFFFFFFu) // Debugging: highlight objects without metallic-roughness texture
+    {
+        oPixel = vec4(1.0, 0.0, 1.0, 1.0);
+        return;
+    }*/
+
     oPixel = vec4(finalColor, texel.a);
+
 }

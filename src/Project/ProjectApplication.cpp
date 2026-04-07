@@ -170,30 +170,44 @@ bool ProjectApplication::Load()
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     }
 
-    if (!MakeShader("./data/shaders/main.vs.glsl", "./data/shaders/main.fs.glsl"))
+    /*if (!MakeShader("./data/shaders/main.vs.glsl", "./data/shaders/main.fs.glsl"))
+    {
+        return false;
+    }*/
+    _geometryProgram = MakeShader("./data/shaders/gbuffer.vs.glsl", "./data/shaders/gbuffer.fs.glsl");
+    if (_geometryProgram == 0)
     {
         return false;
     }
 
+    _lightingProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/deferred_lighting.fs.glsl");
+    if (_lightingProgram == 0)
+    {
+        return false;
+    }
+
+    CreateGBuffer(_windowWidth, _windowHeight);
+    CreateFullscreenTriangle();
+
     //LoadModel("./data/models/SM_Deccer_Cubes_Textured.gltf");
-    LoadModel("./data/models/Sponza/Sponza.gltf");
+	LoadModel("./data/models/Sponza/Sponza.gltf"); // contains some non-power-of-two textures, but we generate mipmaps so it should be fine
 
     return true;
 }
 
 void ProjectApplication::Update(float deltaTime)
 {
-    if (IsKeyPressed(GLFW_KEY_ESCAPE))
+	if (IsKeyPressed(GLFW_KEY_ESCAPE)) // close the app when escape is pressed
     {
         Close();
     }
 
     const bool fDown = IsKeyPressed(GLFW_KEY_F);
-    if (fDown && !_fKeyWasDown)
+	if (fDown && !_fKeyWasDown) // toggle freecam mode when F is pressed
     {
         _freecamEnabled = !_freecamEnabled;
 
-        if (GLFWwindow* window = glfwGetCurrentContext())
+		if (GLFWwindow* window = glfwGetCurrentContext()) // if we have a valid window handle, also toggle the cursor visibility and locking
         {
             glfwSetInputMode(
                 window,
@@ -201,13 +215,13 @@ void ProjectApplication::Update(float deltaTime)
                 _freecamEnabled ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
         }
 
-        _camera.ResetMouseTracking();
+		_camera.ResetMouseTracking(); // reset mouse tracking to prevent sudden jumps in camera orientation when toggling freecam mode
     }
-    _fKeyWasDown = fDown;
+	_fKeyWasDown = fDown; // update the previous state of the F key for the next frame
 
     if (_freecamEnabled)
     {
-        _camera.RespondToMouseMovement();
+		_camera.RespondToMouseMovement(); // update camera orientation based on mouse movement
 
         const float movement = _camera.GetSpeed() * deltaTime;
 
@@ -236,11 +250,11 @@ void ProjectApplication::Update(float deltaTime)
             _camera.MoveVertical(-movement);
         }
 
-        if (IsKeyPressed(GLFW_KEY_Q))
+		if (IsKeyPressed(GLFW_KEY_Q)) // hold Q to move slower
         {
             _camera.ChangeSpeed(1.0f);
         }
-        else if (IsKeyPressed(GLFW_KEY_LEFT_SHIFT))
+		else if (IsKeyPressed(GLFW_KEY_LEFT_SHIFT)) // hold shift to move faster
         {
             _camera.ChangeSpeed(8.0f);
         }
@@ -253,32 +267,33 @@ void ProjectApplication::Update(float deltaTime)
     _elapsedTime += deltaTime;
 }
 
-void ProjectApplication::OnFramebufferResized(int width, int height)
+void ProjectApplication::OnFramebufferResized(int width, int height) // this is called whenever the window is resized, and it updates the viewport and the camera's projection matrix accordingly
 {
-    if (width <= 0 || height <= 0)
+	if (width <= 0 || height <= 0) // if the new dimensions are invalid (e.g. minimized window), we skip updating to avoid issues with zero or negative viewport size
     {
         return;
     }
 
     _windowWidth = width;
     _windowHeight = height;
+    CreateGBuffer(width, height);
 
-    _camera.SetPerspectiveMatrix(glm::perspective(
+	_camera.SetPerspectiveMatrix(glm::perspective( // update the projection matrix to match the new aspect ratio of the window
         glm::radians(80.0f),
         static_cast<float>(width) / static_cast<float>(height),
         0.1f,
         1000.0f));
 }
-
-void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
+/**
+void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime) // called every frame to render the 3D scene, and it uses the current camera view and projection matrices to draw the objects in the scene with the appropriate transformations and lighting
 {   
-    /*
-    const auto projection = glm::perspective(glm::radians(80.0f), 1280.0f / 720.0f, 0.1f, 1000.0f);
-    const auto view = glm::lookAt(
-        glm::vec3(3 * std::cos(glfwGetTime() / 4), 2, -3 * std::sin(glfwGetTime() / 4)),
-        glm::vec3(0, 0, 0),
-        glm::vec3(0, 1, 0));
-    */
+    
+    // const auto projection = glm::perspective(glm::radians(80.0f), 1280.0f / 720.0f, 0.1f, 1000.0f);
+    //const auto view = glm::lookAt(
+    //    glm::vec3(3 * std::cos(glfwGetTime() / 4), 2, -3 * std::sin(glfwGetTime() / 4)),
+    //    glm::vec3(0, 0, 0),
+    //    glm::vec3(0, 1, 0));
+    
     const auto& projection = _camera.GetPerspectiveMatrix();
     const auto view = _camera.GetViewMatrix();
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -327,6 +342,152 @@ void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime)
             static_cast<GLsizei>(batch.Commands.size()),
             sizeof(MeshIndirectInfo));
     }
+}
+*/
+
+void ProjectApplication::RenderScene(float)
+{
+    const auto& projection = _camera.GetPerspectiveMatrix();
+    const auto view = _camera.GetViewMatrix();
+
+    // Geometry pass
+    glBindFramebuffer(GL_FRAMEBUFFER, _gBufferFbo);
+    glViewport(0, 0, _windowWidth, _windowHeight);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(_geometryProgram);
+    glUniformMatrix4fv(0, 1, false, glm::value_ptr(projection));
+    glUniformMatrix4fv(1, 1, false, glm::value_ptr(view));
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _cubes.TransformData);
+    glBindVertexArray(_cubes.InputLayout);
+
+    for (const auto& batch : _renderBatches)
+    {
+        if (batch.Commands.empty())
+        {
+            continue;
+        }
+
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, batch.ObjectDataBuffer);
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, batch.CommandBuffer);
+
+        const uint32_t boundTextureCount = std::min<uint32_t>(
+            static_cast<uint32_t>(batch.TextureIndices.size()),
+            16u);
+
+        for (uint32_t offset = 0; offset < boundTextureCount; ++offset)
+        {
+            glUniform1i(2 + offset, offset);
+            glActiveTexture(GL_TEXTURE0 + offset);
+            glBindTexture(GL_TEXTURE_2D, _cubes.Textures[batch.TextureIndices[offset]]);
+        }
+
+        glMultiDrawElementsIndirect(
+            GL_TRIANGLES,
+            GL_UNSIGNED_INT,
+            nullptr,
+            static_cast<GLsizei>(batch.Commands.size()),
+            sizeof(MeshIndirectInfo));
+    }
+
+    // Lighting pass
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, _windowWidth, _windowHeight);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(_lightingProgram);
+
+    const glm::mat4 invProjection = glm::inverse(projection);
+    const glm::mat4 invView = glm::inverse(view);
+    const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
+    const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
+    const float ambientStrength = 0.2f;
+    const glm::vec3 cameraPosition = _camera.GetPosition();
+
+    glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+    glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
+    glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
+    glUniform3fv(3, 1, glm::value_ptr(lightDirection));
+    glUniform3fv(4, 1, glm::value_ptr(lightColor));
+    glUniform1f(5, ambientStrength);
+    glUniform3fv(6, 1, glm::value_ptr(cameraPosition));
+    glUniform1i(7, _debugView);
+
+    glBindTextureUnit(0, _gAlbedoTexture);
+    glBindTextureUnit(1, _gNormalTexture);
+    glBindTextureUnit(2, _gMaterialTexture);
+    glBindTextureUnit(3, _gDepthTexture);
+
+    glBindVertexArray(_fullscreenVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
+void ProjectApplication::CreateGBuffer(int width, int height)
+{
+    if (_gBufferFbo != 0)
+    {
+        DestroyGBuffer();
+    }
+
+    glCreateFramebuffers(1, &_gBufferFbo);
+
+    glCreateTextures(GL_TEXTURE_2D, 1, &_gAlbedoTexture);
+    glTextureStorage2D(_gAlbedoTexture, 1, GL_RGBA8, width, height);
+    glTextureParameteri(_gAlbedoTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_gAlbedoTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_gBufferFbo, GL_COLOR_ATTACHMENT0, _gAlbedoTexture, 0);
+
+    glCreateTextures(GL_TEXTURE_2D, 1, &_gNormalTexture);
+    glTextureStorage2D(_gNormalTexture, 1, GL_RGBA16F, width, height);
+    glTextureParameteri(_gNormalTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_gNormalTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_gBufferFbo, GL_COLOR_ATTACHMENT1, _gNormalTexture, 0);
+
+    glCreateTextures(GL_TEXTURE_2D, 1, &_gMaterialTexture);
+    glTextureStorage2D(_gMaterialTexture, 1, GL_RGBA8, width, height);
+    glTextureParameteri(_gMaterialTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_gMaterialTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_gBufferFbo, GL_COLOR_ATTACHMENT2, _gMaterialTexture, 0);
+
+    glCreateTextures(GL_TEXTURE_2D, 1, &_gDepthTexture);
+    glTextureStorage2D(_gDepthTexture, 1, GL_DEPTH_COMPONENT32F, width, height);
+    glTextureParameteri(_gDepthTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_gDepthTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_gBufferFbo, GL_DEPTH_ATTACHMENT, _gDepthTexture, 0);
+
+    const GLenum drawBuffers[] =
+    {
+        GL_COLOR_ATTACHMENT0,
+        GL_COLOR_ATTACHMENT1,
+        GL_COLOR_ATTACHMENT2
+    };
+    glNamedFramebufferDrawBuffers(_gBufferFbo, 3, drawBuffers);
+
+    if (glCheckNamedFramebufferStatus(_gBufferFbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        spdlog::error("G-buffer framebuffer is incomplete");
+    }
+}
+
+void ProjectApplication::DestroyGBuffer()
+{
+    if (_gAlbedoTexture) glDeleteTextures(1, &_gAlbedoTexture);
+    if (_gNormalTexture) glDeleteTextures(1, &_gNormalTexture);
+    if (_gMaterialTexture) glDeleteTextures(1, &_gMaterialTexture);
+    if (_gDepthTexture) glDeleteTextures(1, &_gDepthTexture);
+    if (_gBufferFbo) glDeleteFramebuffers(1, &_gBufferFbo);
+
+    _gAlbedoTexture = 0;
+    _gNormalTexture = 0;
+    _gMaterialTexture = 0;
+    _gDepthTexture = 0;
+    _gBufferFbo = 0;
+}
+
+void ProjectApplication::CreateFullscreenTriangle()
+{
+    glCreateVertexArrays(1, &_fullscreenVao);
 }
 
 void ProjectApplication::RenderUI(float deltaTime)
@@ -387,13 +548,22 @@ void ProjectApplication::RenderUI(float deltaTime)
             const glm::vec3 newPos(editablePos[0], editablePos[1], editablePos[2]);
             _camera.Set(newPos, newPos + _camera.GetForward(), _camera.GetUpVector());
         }
+
+        ImGui::Separator();
+        ImGui::Text("Deferred Debug View");
+        ImGui::RadioButton("Lit", &_debugView, 0);
+        ImGui::RadioButton("Albedo", &_debugView, 1);
+        ImGui::RadioButton("Normal", &_debugView, 2);
+        ImGui::RadioButton("Material", &_debugView, 3);
+        ImGui::RadioButton("Depth", &_debugView, 4);
+
         ImGui::End();
     }
     
     //ImGui::ShowDemoWindow();
 }
 
-bool ProjectApplication::MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath)
+uint32_t ProjectApplication::MakeShader(std::string_view vertexShaderFilePath, std::string_view fragmentShaderFilePath)
 {
     int success = false;
     char log[1024] = {};
@@ -407,7 +577,7 @@ bool ProjectApplication::MakeShader(std::string_view vertexShaderFilePath, std::
     {
         glGetShaderInfoLog(vertexShader, 1024, nullptr, log);
         spdlog::error(log);
-        return false;
+        return 0;
     }
 
     const auto fragmentShaderSource = Slurp(fragmentShaderFilePath);
@@ -420,26 +590,31 @@ bool ProjectApplication::MakeShader(std::string_view vertexShaderFilePath, std::
     {
         glGetShaderInfoLog(fragmentShader, 1024, nullptr, log);
         spdlog::error(log);
-        return false;
+        return 0;
     }
 
-    _shaderProgram = glCreateProgram();
+    /*_shaderProgram = glCreateProgram();
     glAttachShader(_shaderProgram, vertexShader);
     glAttachShader(_shaderProgram, fragmentShader);
     glLinkProgram(_shaderProgram);
-    glGetProgramiv(_shaderProgram, GL_LINK_STATUS, &success);
+    glGetProgramiv(_shaderProgram, GL_LINK_STATUS, &success);*/
+    const auto program = glCreateProgram();
+    glAttachShader(program, vertexShader);
+    glAttachShader(program, fragmentShader);
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
     if (!success)
     {
-        glGetProgramInfoLog(_shaderProgram, 1024, nullptr, log);
+        glGetProgramInfoLog(program, 1024, nullptr, log);
         spdlog::error(log);
 
-        return false;
+        return 0;
     }
 
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    return true;
+    return program;
 }
 
 void ProjectApplication::LoadModel(std::string_view file)
@@ -489,6 +664,7 @@ void ProjectApplication::LoadModel(std::string_view file)
             const auto* image = material.pbr_metallic_roughness.base_color_texture.texture->image;
             const auto texturePath = FindTexturePath(basePath, image);
             LoadTexture2D(texturePath, textureIds, _cubes.Textures, true);
+			//spdlog::info("Loaded base color texture: {}", texturePath);
         }
 
         if (material.normal_texture.texture != nullptr)
@@ -496,6 +672,7 @@ void ProjectApplication::LoadModel(std::string_view file)
             const auto* image = material.normal_texture.texture->image;
             const auto texturePath = FindTexturePath(basePath, image);
             LoadTexture2D(texturePath, textureIds, _cubes.Textures, false);
+			//spdlog::info("Loaded normal texture: {}", texturePath);
         }
 
         if (material.has_pbr_metallic_roughness &&
@@ -504,13 +681,16 @@ void ProjectApplication::LoadModel(std::string_view file)
             const auto* image = material.pbr_metallic_roughness.metallic_roughness_texture.texture->image;
             const auto texturePath = FindTexturePath(basePath, image);
             LoadTexture2D(texturePath, textureIds, _cubes.Textures, false);
+			//spdlog::info("Loaded metallic-roughness texture: {}", texturePath);
         }
-        if (material.occlusion_texture.texture != nullptr)
+		//spdlog::info("Loading occlusion texture for material {}: {}", i, material.name ? material.name : "(unnamed)");
+        /*if (material.occlusion_texture.texture != nullptr)
         {
             const auto* image = material.occlusion_texture.texture->image;
             const auto texturePath = FindTexturePath(basePath, image);
             LoadTexture2D(texturePath, textureIds, _cubes.Textures, false);
-        }
+			spdlog::info("Loaded occlusion texture: {}", texturePath);
+        }*/
     }
 
     uint32_t transformIndex = 0;
@@ -658,12 +838,14 @@ void ProjectApplication::LoadModel(std::string_view file)
 						//spdlog::info("2: metallic-roughness texture: {}", metallicRoughnessURI);
                     }
                 }
-
+                /*
                 std::string occlusionURI = "";
+                //spdlog::info("Loading occlusion texture...");
                 if (primitive.material && primitive.material->occlusion_texture.texture != nullptr)
                 {
                     occlusionURI = FindTexturePath(basePath, primitive.material->occlusion_texture.texture->image);
-                }
+                    spdlog::info("3: occlusion texture: {}", occlusionURI);
+                }*/
 
                 const auto indexCount = indices.size();
                 meshCreateInfos.emplace_back(MeshCreateInfo
@@ -674,7 +856,7 @@ void ProjectApplication::LoadModel(std::string_view file)
                         baseColorURI.empty() ? _whiteTextureIndex : static_cast<uint32_t>(textureIds[baseColorURI + "|srgb"]),
                         normalURI.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[normalURI + "|linear"]),
                         metallicRoughnessURI.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[metallicRoughnessURI + "|linear"]),
-                        occlusionURI.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[occlusionURI + "|linear"]),
+                        //occlusionURI.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(textureIds[occlusionURI + "|linear"]),
                         metallicFactor,
                         roughnessFactor,
                         vertexOffset,
@@ -757,7 +939,7 @@ void ProjectApplication::LoadModel(std::string_view file)
                 info.BaseColorTexture,
                 info.NormalTexture,
                 info.MetallicRoughnessTexture,
-                info.OcclusionTexture,
+                //info.OcclusionTexture,
                 info.MetallicFactor,
                 info.RoughnessFactor
             });
@@ -786,14 +968,14 @@ void ProjectApplication::LoadModel(std::string_view file)
                 meshTextureIndices.push_back(mesh.MetallicRoughnessTexture);
             }
         }
-
+        /*
         if (mesh.OcclusionTexture != 0xFFFFFFFFu)
         {
             if (std::find(meshTextureIndices.begin(), meshTextureIndices.end(), mesh.OcclusionTexture) == meshTextureIndices.end())
             {
                 meshTextureIndices.push_back(mesh.OcclusionTexture);
             }
-        }
+        }*/
 
         RenderBatch* batch = &_renderBatches.back();
 
@@ -825,12 +1007,12 @@ void ProjectApplication::LoadModel(std::string_view file)
         {
             localMetallicRoughnessSlot = GetOrAddTextureSlot(*batch, mesh.MetallicRoughnessTexture);
         }
-
+        /*
         uint32_t localOcclusionSlot = 0xFFFFFFFFu;
         if (mesh.OcclusionTexture != 0xFFFFFFFFu)
         {
             localOcclusionSlot = GetOrAddTextureSlot(*batch, mesh.OcclusionTexture);
-        }
+        }*/
 
         batch->Commands.emplace_back(MeshIndirectInfo{
             mesh.IndexCount,
@@ -845,7 +1027,7 @@ void ProjectApplication::LoadModel(std::string_view file)
             localBaseColorSlot,
             localNormalSlot,
             localMetallicRoughnessSlot,
-			localOcclusionSlot,
+			//localOcclusionSlot,
             mesh.MetallicFactor,
             mesh.RoughnessFactor
             });
@@ -870,6 +1052,7 @@ void ProjectApplication::LoadModel(std::string_view file)
 
     for (size_t i = 0; i < _renderBatches.size(); ++i)
     {
+        spdlog::info("Batch {} texture count = {}", i, _renderBatches[i].TextureIndices.size());
         if (_renderBatches[i].TextureIndices.size() > 16)
         {
             spdlog::warn("Batch {} uses {} textures, exceeding 16 texture units", i, _renderBatches[i].TextureIndices.size());
