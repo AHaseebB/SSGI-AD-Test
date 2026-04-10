@@ -109,6 +109,7 @@ private:
     Model _cubes;
     uint32_t _shaderProgram;
     Camera _camera;
+    uint32_t _ssgiTestProgram = 0;
 
     bool _freecamEnabled = true;
     int _windowWidth = 1920;

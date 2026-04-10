@@ -59,6 +59,13 @@ void main()
 
     vec3 worldPos = ReconstructWorldPosition(uv, depth);
 
+    if (uDebugView == 5)
+{
+    vec3 p = worldPos * 0.05;
+    oPixel = vec4(fract(abs(p)), 1.0);
+    return;
+}
+
     float roughness = material.r;
     float metallic = material.g;
 

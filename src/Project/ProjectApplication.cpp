@@ -186,6 +186,12 @@ bool ProjectApplication::Load()
         return false;
     }
 
+    _ssgiTestProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_test.fs.glsl");
+    if (_ssgiTestProgram == 0)
+    {
+        return false;
+    }
+
     CreateGBuffer(_windowWidth, _windowHeight);
     CreateFullscreenTriangle();
 
@@ -396,7 +402,8 @@ void ProjectApplication::RenderScene(float)
     glViewport(0, 0, _windowWidth, _windowHeight);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glUseProgram(_lightingProgram);
+    const bool useSsgiTest = (_debugView == 6);
+    glUseProgram(useSsgiTest ? _ssgiTestProgram : _lightingProgram);
 
     const glm::mat4 invProjection = glm::inverse(projection);
     const glm::mat4 invView = glm::inverse(view);
@@ -405,14 +412,26 @@ void ProjectApplication::RenderScene(float)
     const float ambientStrength = 0.2f;
     const glm::vec3 cameraPosition = _camera.GetPosition();
 
-    glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
-    glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
-    glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
-    glUniform3fv(3, 1, glm::value_ptr(lightDirection));
-    glUniform3fv(4, 1, glm::value_ptr(lightColor));
-    glUniform1f(5, ambientStrength);
-    glUniform3fv(6, 1, glm::value_ptr(cameraPosition));
-    glUniform1i(7, _debugView);
+    if (useSsgiTest)
+    {
+        glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+        glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(projection));
+        glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(glm::inverse(projection)));
+        glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(4, 1, GL_FALSE, glm::value_ptr(glm::inverse(view)));
+        glUniform3fv(5, 1, glm::value_ptr(cameraPosition));
+    }
+    else {
+        glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+        glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
+        glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
+        glUniform3fv(3, 1, glm::value_ptr(lightDirection));
+        glUniform3fv(4, 1, glm::value_ptr(lightColor));
+        glUniform1f(5, ambientStrength);
+        glUniform3fv(6, 1, glm::value_ptr(cameraPosition));
+        glUniform1i(7, _debugView);
+    }
+
 
     glBindTextureUnit(0, _gAlbedoTexture);
     glBindTextureUnit(1, _gNormalTexture);
@@ -556,6 +575,8 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::RadioButton("Normal", &_debugView, 2);
         ImGui::RadioButton("Material", &_debugView, 3);
         ImGui::RadioButton("Depth", &_debugView, 4);
+        ImGui::RadioButton("World Position", &_debugView, 5);
+        ImGui::RadioButton("SSGI Indirect", &_debugView, 6);
 
         ImGui::End();
     }
