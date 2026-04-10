@@ -186,19 +186,72 @@ bool ProjectApplication::Load()
         return false;
     }
 
-    _ssgiTestProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_test.fs.glsl");
-    if (_ssgiTestProgram == 0)
+    _ssgiGenerateProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_test.fs.glsl");
+    if (_ssgiGenerateProgram == 0)
+    {
+        return false;
+    }
+
+    _ssgiBlurProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_blur.fs.glsl");
+    if (_ssgiBlurProgram == 0)
+    {
+        return false;
+    }
+    _ssgiCompositeProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_composite.fs.glsl");
+    if (_ssgiCompositeProgram == 0)
     {
         return false;
     }
 
     CreateGBuffer(_windowWidth, _windowHeight);
+    CreateSsgiTargets(_windowWidth, _windowHeight);
     CreateFullscreenTriangle();
 
     //LoadModel("./data/models/SM_Deccer_Cubes_Textured.gltf");
 	LoadModel("./data/models/Sponza/Sponza.gltf"); // contains some non-power-of-two textures, but we generate mipmaps so it should be fine
 
     return true;
+}
+
+void ProjectApplication::CreateSsgiTargets(int width, int height)
+{
+    DestroySsgiTargets();
+
+    glCreateFramebuffers(1, &_ssgiRawFbo);
+    glCreateTextures(GL_TEXTURE_2D, 1, &_ssgiRawTexture);
+    glTextureStorage2D(_ssgiRawTexture, 1, GL_RGBA16F, width, height);
+    glTextureParameteri(_ssgiRawTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_ssgiRawTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_ssgiRawFbo, GL_COLOR_ATTACHMENT0, _ssgiRawTexture, 0);
+
+    glCreateFramebuffers(1, &_ssgiFilteredFbo);
+    glCreateTextures(GL_TEXTURE_2D, 1, &_ssgiFilteredTexture);
+    glTextureStorage2D(_ssgiFilteredTexture, 1, GL_RGBA16F, width, height);
+    glTextureParameteri(_ssgiFilteredTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_ssgiFilteredTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_ssgiFilteredFbo, GL_COLOR_ATTACHMENT0, _ssgiFilteredTexture, 0);
+
+    if (glCheckNamedFramebufferStatus(_ssgiRawFbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        spdlog::error("SSGI raw framebuffer is incomplete");
+    }
+    if (glCheckNamedFramebufferStatus(_ssgiFilteredFbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        spdlog::error("SSGI filtered framebuffer is incomplete");
+    }
+}
+
+void ProjectApplication::DestroySsgiTargets()
+{
+    if (_ssgiRawTexture) glDeleteTextures(1, &_ssgiRawTexture);
+    if (_ssgiFilteredTexture) glDeleteTextures(1, &_ssgiFilteredTexture);
+    if (_ssgiRawFbo) glDeleteFramebuffers(1, &_ssgiRawFbo);
+    if (_ssgiFilteredFbo) glDeleteFramebuffers(1, &_ssgiFilteredFbo);
+
+    _ssgiRawTexture = 0;
+    _ssgiFilteredTexture = 0;
+    _ssgiRawFbo = 0;
+    _ssgiFilteredFbo = 0;
 }
 
 void ProjectApplication::Update(float deltaTime)
@@ -282,74 +335,15 @@ void ProjectApplication::OnFramebufferResized(int width, int height) // this is 
 
     _windowWidth = width;
     _windowHeight = height;
-    CreateGBuffer(width, height);
+    CreateGBuffer(_windowWidth, _windowHeight);
+    CreateSsgiTargets(_windowWidth, _windowHeight);
 
 	_camera.SetPerspectiveMatrix(glm::perspective( // update the projection matrix to match the new aspect ratio of the window
         glm::radians(80.0f),
-        static_cast<float>(width) / static_cast<float>(height),
+        static_cast<float>(_windowWidth) / static_cast<float>(_windowHeight),
         0.1f,
         1000.0f));
 }
-/**
-void ProjectApplication::RenderScene([[maybe_unused]] float deltaTime) // called every frame to render the 3D scene, and it uses the current camera view and projection matrices to draw the objects in the scene with the appropriate transformations and lighting
-{   
-    
-    // const auto projection = glm::perspective(glm::radians(80.0f), 1280.0f / 720.0f, 0.1f, 1000.0f);
-    //const auto view = glm::lookAt(
-    //    glm::vec3(3 * std::cos(glfwGetTime() / 4), 2, -3 * std::sin(glfwGetTime() / 4)),
-    //    glm::vec3(0, 0, 0),
-    //    glm::vec3(0, 1, 0));
-    
-    const auto& projection = _camera.GetPerspectiveMatrix();
-    const auto view = _camera.GetViewMatrix();
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(_shaderProgram);
-    glUniformMatrix4fv(0, 1, false, glm::value_ptr(projection));
-    glUniformMatrix4fv(1, 1, false, glm::value_ptr(view));
-
-    const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
-    const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
-    const float ambientStrength = 0.2f;
-    glUniform3fv(18, 1, glm::value_ptr(lightDirection));
-    glUniform3fv(19, 1, glm::value_ptr(lightColor));
-    glUniform1f(20, ambientStrength);
-
-    const glm::vec3 cameraPosition = _camera.GetPosition();
-    glUniform3fv(21, 1, glm::value_ptr(cameraPosition));
-
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _cubes.TransformData);
-    glBindVertexArray(_cubes.InputLayout);
-
-    for (const auto& batch : _renderBatches)
-    {
-        if (batch.Commands.empty())
-        {
-            continue;
-        }
-
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, batch.ObjectDataBuffer);
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, batch.CommandBuffer);
-
-        const uint32_t boundTextureCount = std::min<uint32_t>(
-            static_cast<uint32_t>(batch.TextureIndices.size()),
-            16u);
-
-        for (uint32_t offset = 0; offset < boundTextureCount; ++offset)
-        {
-            glUniform1i(2 + offset, offset);
-            glActiveTexture(GL_TEXTURE0 + offset);
-            glBindTexture(GL_TEXTURE_2D, _cubes.Textures[batch.TextureIndices[offset]]);
-        }
-
-        glMultiDrawElementsIndirect(
-            GL_TRIANGLES,
-            GL_UNSIGNED_INT,
-            nullptr,
-            static_cast<GLsizei>(batch.Commands.size()),
-            sizeof(MeshIndirectInfo));
-    }
-}
-*/
 
 void ProjectApplication::RenderScene(float)
 {
@@ -397,52 +391,76 @@ void ProjectApplication::RenderScene(float)
             sizeof(MeshIndirectInfo));
     }
 
-    // Lighting pass
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // generate pass
+    glBindFramebuffer(GL_FRAMEBUFFER, _ssgiRawFbo);
     glViewport(0, 0, _windowWidth, _windowHeight);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT);
 
-    const bool useSsgiTest = (_debugView == 6);
-    glUseProgram(useSsgiTest ? _ssgiTestProgram : _lightingProgram);
+    glUseProgram(_ssgiGenerateProgram);
 
     const glm::mat4 invProjection = glm::inverse(projection);
     const glm::mat4 invView = glm::inverse(view);
-    const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
-    const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
-    const float ambientStrength = 0.2f;
     const glm::vec3 cameraPosition = _camera.GetPosition();
+    const float ssgiIntensity = 0.5f;
 
-    if (useSsgiTest)
-    {
-        const float ssgiIntensity = 5.0f;
-        glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
-        glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invProjection));
-        glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(invView));
-        glUniformMatrix4fv(4, 1, GL_FALSE, glm::value_ptr(glm::inverse(view)));
-        glUniform3fv(5, 1, glm::value_ptr(cameraPosition));
-        glUniform1f(6, ssgiIntensity);
-        glUniform3fv(7, 1, glm::value_ptr(lightDirection));
-        glUniform3fv(8, 1, glm::value_ptr(lightColor));
-        glUniform1f(9, ambientStrength);
-    }
-    else {
-        glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
-        glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
-        glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
-        glUniform3fv(3, 1, glm::value_ptr(lightDirection));
-        glUniform3fv(4, 1, glm::value_ptr(lightColor));
-        glUniform1f(5, ambientStrength);
-        glUniform3fv(6, 1, glm::value_ptr(cameraPosition));
-        glUniform1i(7, _debugView);
-    }
-
+    glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+    glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(projection));
+    glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invProjection));
+    glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(4, 1, GL_FALSE, glm::value_ptr(invView));
+    glUniform3fv(5, 1, glm::value_ptr(cameraPosition));
+    glUniform1f(6, ssgiIntensity);
 
     glBindTextureUnit(0, _gAlbedoTexture);
     glBindTextureUnit(1, _gNormalTexture);
     glBindTextureUnit(2, _gMaterialTexture);
     glBindTextureUnit(3, _gDepthTexture);
-    //spdlog::info("Using {} shader", useSsgiTest ? "SSGI" : "lighting");
+    glBindVertexArray(_fullscreenVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+	// blur pass
+    glBindFramebuffer(GL_FRAMEBUFFER, _ssgiFilteredFbo);
+    glViewport(0, 0, _windowWidth, _windowHeight);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glUseProgram(_ssgiBlurProgram);
+
+    glUniform2f(0, 1.0f / static_cast<float>(_windowWidth), 1.0f / static_cast<float>(_windowHeight));
+
+    glBindTextureUnit(0, _ssgiRawTexture);
+    glBindTextureUnit(1, _gDepthTexture);
+
+    glBindVertexArray(_fullscreenVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+	// composite pass
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, _windowWidth, _windowHeight);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(_ssgiCompositeProgram);
+
+    const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
+    const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
+    const float ambientStrength = 0.1f;
+    const glm::vec3 cameraPosition2 = _camera.GetPosition();
+
+    glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+    glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
+    glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
+    glUniform3fv(3, 1, glm::value_ptr(lightDirection));
+    glUniform3fv(4, 1, glm::value_ptr(lightColor));
+    glUniform1f(5, ambientStrength);
+    glUniform3fv(6, 1, glm::value_ptr(cameraPosition2));
+    glUniform1i(7, _debugView);
+
+    glBindTextureUnit(0, _gAlbedoTexture);
+    glBindTextureUnit(1, _gNormalTexture);
+    glBindTextureUnit(2, _gMaterialTexture);
+    glBindTextureUnit(3, _gDepthTexture);
+    glBindTextureUnit(4, _ssgiRawTexture);
+    glBindTextureUnit(5, _ssgiFilteredTexture);
+
     glBindVertexArray(_fullscreenVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
@@ -575,13 +593,14 @@ void ProjectApplication::RenderUI(float deltaTime)
 
         ImGui::Separator();
         ImGui::Text("Deferred Debug View");
-        ImGui::RadioButton("Lit", &_debugView, 0);
+        ImGui::RadioButton("Final Composite", &_debugView, 0);
         ImGui::RadioButton("Albedo", &_debugView, 1);
         ImGui::RadioButton("Normal", &_debugView, 2);
         ImGui::RadioButton("Material", &_debugView, 3);
         ImGui::RadioButton("Depth", &_debugView, 4);
         ImGui::RadioButton("World Position", &_debugView, 5);
-        ImGui::RadioButton("SSGI Lit", &_debugView, 6);
+        ImGui::RadioButton("SSGI Raw", &_debugView, 6);
+        ImGui::RadioButton("SSGI Filtered", &_debugView, 7);
 
         ImGui::End();
     }

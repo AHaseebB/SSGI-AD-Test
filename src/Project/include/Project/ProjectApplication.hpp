@@ -104,12 +104,13 @@ protected:
     void CreateGBuffer(int width, int height);
     void DestroyGBuffer();
     void CreateFullscreenTriangle();
+    void CreateSsgiTargets(int width, int height);
+    void DestroySsgiTargets();
 
 private:
     Model _cubes;
     uint32_t _shaderProgram;
     Camera _camera;
-    uint32_t _ssgiTestProgram = 0;
 
     bool _freecamEnabled = true;
     int _windowWidth = 1920;
@@ -139,6 +140,16 @@ private:
 	uint32_t _lightingProgram = 0;
 
     uint32_t _fullscreenVao = 0;
+
+    uint32_t _ssgiRawFbo = 0;
+    uint32_t _ssgiRawTexture = 0;
+
+    uint32_t _ssgiFilteredFbo = 0;
+    uint32_t _ssgiFilteredTexture = 0;
+
+    uint32_t _ssgiGenerateProgram = 0;
+    uint32_t _ssgiBlurProgram = 0;
+    uint32_t _ssgiCompositeProgram = 0;
 
     int _debugView = 0; // 0 = lit, 1 = albedo, 2 = normal, 3 = material, 4 = depth
 
