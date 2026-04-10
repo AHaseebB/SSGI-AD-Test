@@ -355,7 +355,7 @@ void ProjectApplication::RenderScene(float)
 {
     const auto& projection = _camera.GetPerspectiveMatrix();
     const auto view = _camera.GetViewMatrix();
-
+    
     // Geometry pass
     glBindFramebuffer(GL_FRAMEBUFFER, _gBufferFbo);
     glViewport(0, 0, _windowWidth, _windowHeight);
@@ -414,12 +414,17 @@ void ProjectApplication::RenderScene(float)
 
     if (useSsgiTest)
     {
+        const float ssgiIntensity = 5.0f;
         glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
         glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(glm::inverse(projection)));
-        glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invProjection));
+        glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(invView));
         glUniformMatrix4fv(4, 1, GL_FALSE, glm::value_ptr(glm::inverse(view)));
         glUniform3fv(5, 1, glm::value_ptr(cameraPosition));
+        glUniform1f(6, ssgiIntensity);
+        glUniform3fv(7, 1, glm::value_ptr(lightDirection));
+        glUniform3fv(8, 1, glm::value_ptr(lightColor));
+        glUniform1f(9, ambientStrength);
     }
     else {
         glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
@@ -437,7 +442,7 @@ void ProjectApplication::RenderScene(float)
     glBindTextureUnit(1, _gNormalTexture);
     glBindTextureUnit(2, _gMaterialTexture);
     glBindTextureUnit(3, _gDepthTexture);
-
+    //spdlog::info("Using {} shader", useSsgiTest ? "SSGI" : "lighting");
     glBindVertexArray(_fullscreenVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
@@ -576,7 +581,7 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::RadioButton("Material", &_debugView, 3);
         ImGui::RadioButton("Depth", &_debugView, 4);
         ImGui::RadioButton("World Position", &_debugView, 5);
-        ImGui::RadioButton("SSGI Indirect", &_debugView, 6);
+        ImGui::RadioButton("SSGI Lit", &_debugView, 6);
 
         ImGui::End();
     }

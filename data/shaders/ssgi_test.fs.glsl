@@ -13,6 +13,10 @@ layout (location = 2) uniform mat4 uInvProjection;
 layout (location = 3) uniform mat4 uView;
 layout (location = 4) uniform mat4 uInvView;
 layout (location = 5) uniform vec3 uCameraPosition;
+layout (location = 6) uniform float uSsgiIntensity;
+layout (location = 7) uniform vec3 uLightDirection;
+layout (location = 8) uniform vec3 uLightColor;
+layout (location = 9) uniform float uAmbientStrength;
 
 vec3 ReconstructViewPosition(vec2 uv, float depth)
 {
@@ -51,13 +55,34 @@ void main()
     vec3 worldPos = ReconstructWorldPosition(uv, depth);
     vec3 normal = texture(uGNormal, uv).rgb * 2.0 - 1.0;
     normal = normalize(normal);
+    vec3 albedo = texture(uGAlbedo, uv).rgb;
+    vec2 material = texture(uGMaterial, uv).rg;
 
+    float roughness = material.r;
+    float metallic = material.g;
+
+    vec3 L = normalize(-uLightDirection);
+    vec3 V = normalize(uCameraPosition - worldPos);
+    vec3 H = normalize(L + V);
+
+    float shininess = mix(128.0, 4.0, clamp(roughness, 0.0, 1.0));
+    float NdotL = max(dot(normal, L), 0.0);
+    float NdotH = max(dot(normal, H), 0.0);
+
+    vec3 ambient = uAmbientStrength * albedo;
+    vec3 diffuse = NdotL * uLightColor * albedo;
+
+    float spec = pow(NdotH, shininess);
+    vec3 specularColor = mix(vec3(0.04), albedo, metallic);
+    vec3 specular = spec * specularColor * uLightColor;
+
+    vec3 direct = ambient + diffuse + specular;
     
     vec3 rayDir = normalize(normal + vec3(0.0, 0.2, 0.0)); // first-direction choice: normal-biased hemisphere
 
-    float stepSize = 0.1;
-    int maxSteps = 64;
-    float thickness = 0.15;
+    float stepSize = 0.05;
+    int maxSteps = 96;
+    float thickness = 0.1;
 
     bool hit = false;
     vec2 hitUV = vec2(0.0);
@@ -94,7 +119,7 @@ void main()
 
     if (!hit)
     {
-        oPixel = vec4(0.0, 0.0, 0.0, 1.0);
+        oPixel = vec4(direct, 1.0); // if no hit was found, output the direct lighting alone
         return;
     }
 
@@ -107,9 +132,10 @@ void main()
     float NdotL0 = max(dot(normal, toHit), 0.0);
     float NdotL1 = max(dot(hitNormal, -toHit), 0.0);
 
-    
     vec3 indirect = hitAlbedo * NdotL0 * NdotL1; // simple visibility-weighted indirect term
 
-
-    oPixel = vec4(indirect, 1.0);
+    //oPixel = vec4(indirect, 1.0); // debug: visualize the indirect contribution alone
+    vec3 finalColor = direct + indirect * uSsgiIntensity; // combine direct and indirect contributions, allowing control over the SSGI intensity with a uniform
+    
+    oPixel = vec4(finalColor, 1.0); // if a hit was found, output the combined direct and indirect lighting
 }
