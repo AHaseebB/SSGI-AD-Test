@@ -106,6 +106,8 @@ protected:
     void CreateFullscreenTriangle();
     void CreateSsgiTargets(int width, int height);
     void DestroySsgiTargets();
+    void CreateTemporalTargets(int width, int height);
+    void DestroyTemporalTargets();
 
 private:
     Model _cubes;
@@ -158,6 +160,21 @@ private:
     int _blurRadius = 2;
     float _blurDepthStrength = 200.0f;
     float _blurNormalPower = 32.0f;
+    float _adaptiveDepthScale = 1000.0f;
+    float _adaptiveNormalScale = 8.0f;
+    bool _useAdaptiveDenoiser = true;
+    int _denoiserMode = 2; // 0 = raw, 1 = fixed, 2 = adaptive
+
+    glm::mat4 _previousViewProjection = glm::mat4(1.0f);
+    bool _hasHistory = false;
+	uint32_t _ssgiHistoryFbo = 0; // keep the history of the raw SSGI results to do temporal reprojection for the adaptive denoiser
+    uint32_t _ssgiHistoryTexture = 0;
+    uint32_t _ssgiTemporalProgram = 0;
+    uint32_t _ssgiTemporalFbo = 0;
+    uint32_t _ssgiTemporalTexture = 0;
+    float _temporalAlpha = 0.7f;
+    float _temporalDepthThreshold = 0.005f;
+    float _temporalNormalThreshold = 0.9f;
 
     int _debugView = 0; // 0 = lit, 1 = albedo, 2 = normal, 3 = material, 4 = depth
 

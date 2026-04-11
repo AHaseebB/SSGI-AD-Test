@@ -202,9 +202,15 @@ bool ProjectApplication::Load()
     {
         return false;
     }
+    _ssgiTemporalProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_temporal.fs.glsl");
+    if (_ssgiTemporalProgram == 0)
+    {
+        return false;
+    }
 
     CreateGBuffer(_windowWidth, _windowHeight);
     CreateSsgiTargets(_windowWidth, _windowHeight);
+    CreateTemporalTargets(_windowWidth, _windowHeight);
     CreateFullscreenTriangle();
 
     //LoadModel("./data/models/SM_Deccer_Cubes_Textured.gltf");
@@ -252,6 +258,48 @@ void ProjectApplication::DestroySsgiTargets()
     _ssgiFilteredTexture = 0;
     _ssgiRawFbo = 0;
     _ssgiFilteredFbo = 0;
+}
+
+void ProjectApplication::CreateTemporalTargets(int width, int height)
+{
+    DestroyTemporalTargets();
+
+    glCreateFramebuffers(1, &_ssgiHistoryFbo);
+    glCreateTextures(GL_TEXTURE_2D, 1, &_ssgiHistoryTexture);
+    glTextureStorage2D(_ssgiHistoryTexture, 1, GL_RGBA16F, width, height);
+    glTextureParameteri(_ssgiHistoryTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_ssgiHistoryTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_ssgiHistoryFbo, GL_COLOR_ATTACHMENT0, _ssgiHistoryTexture, 0);
+
+    glCreateFramebuffers(1, &_ssgiTemporalFbo);
+    glCreateTextures(GL_TEXTURE_2D, 1, &_ssgiTemporalTexture);
+    glTextureStorage2D(_ssgiTemporalTexture, 1, GL_RGBA16F, width, height);
+    glTextureParameteri(_ssgiTemporalTexture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTextureParameteri(_ssgiTemporalTexture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glNamedFramebufferTexture(_ssgiTemporalFbo, GL_COLOR_ATTACHMENT0, _ssgiTemporalTexture, 0);
+
+    if (glCheckNamedFramebufferStatus(_ssgiHistoryFbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        spdlog::error("SSGI history framebuffer is incomplete");
+    }
+
+    if (glCheckNamedFramebufferStatus(_ssgiTemporalFbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        spdlog::error("SSGI temporal framebuffer is incomplete");
+    }
+}
+
+void ProjectApplication::DestroyTemporalTargets()
+{
+    if (_ssgiHistoryTexture) glDeleteTextures(1, &_ssgiHistoryTexture);
+    if (_ssgiTemporalTexture) glDeleteTextures(1, &_ssgiTemporalTexture);
+    if (_ssgiHistoryFbo) glDeleteFramebuffers(1, &_ssgiHistoryFbo);
+    if (_ssgiTemporalFbo) glDeleteFramebuffers(1, &_ssgiTemporalFbo);
+
+    _ssgiHistoryTexture = 0;
+    _ssgiTemporalTexture = 0;
+    _ssgiHistoryFbo = 0;
+    _ssgiTemporalFbo = 0;
 }
 
 void ProjectApplication::Update(float deltaTime)
@@ -337,6 +385,8 @@ void ProjectApplication::OnFramebufferResized(int width, int height) // this is 
     _windowHeight = height;
     CreateGBuffer(_windowWidth, _windowHeight);
     CreateSsgiTargets(_windowWidth, _windowHeight);
+    CreateTemporalTargets(_windowWidth, _windowHeight);
+    _hasHistory = false;
 
 	_camera.SetPerspectiveMatrix(glm::perspective( // update the projection matrix to match the new aspect ratio of the window
         glm::radians(80.0f),
@@ -432,10 +482,37 @@ void ProjectApplication::RenderScene(float)
     glUniform1i(1, _blurRadius);
     glUniform1f(2, _blurDepthStrength);
     glUniform1f(3, _blurNormalPower);
+    glUniform1i(4, _denoiserMode);
+    glUniform1f(5, _adaptiveDepthScale);
+    glUniform1f(6, _adaptiveNormalScale);
 
     glBindTextureUnit(0, _ssgiRawTexture);
     glBindTextureUnit(1, _gDepthTexture);
     glBindTextureUnit(2, _gNormalTexture);
+
+    glBindVertexArray(_fullscreenVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // temporal pass
+    glBindFramebuffer(GL_FRAMEBUFFER, _ssgiTemporalFbo);
+    glViewport(0, 0, _windowWidth, _windowHeight);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glUseProgram(_ssgiTemporalProgram);
+
+    glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+    glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
+    glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
+    glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(_previousViewProjection));
+    glUniform1f(4, _temporalAlpha);
+    glUniform1f(5, _temporalDepthThreshold);
+    glUniform1f(6, _temporalNormalThreshold);
+    glUniform1i(7, _hasHistory ? 1 : 0);
+
+    glBindTextureUnit(0, _ssgiFilteredTexture);
+    glBindTextureUnit(1, _ssgiHistoryTexture);
+    glBindTextureUnit(2, _gDepthTexture);
+    glBindTextureUnit(3, _gNormalTexture);
 
     glBindVertexArray(_fullscreenVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -460,6 +537,7 @@ void ProjectApplication::RenderScene(float)
     glUniform1f(5, ambientStrength);
     glUniform3fv(6, 1, glm::value_ptr(cameraPosition2));
     glUniform1i(7, _debugView);
+    glUniform1i(8, _denoiserMode);
 
     glBindTextureUnit(0, _gAlbedoTexture);
     glBindTextureUnit(1, _gNormalTexture);
@@ -467,9 +545,18 @@ void ProjectApplication::RenderScene(float)
     glBindTextureUnit(3, _gDepthTexture);
     glBindTextureUnit(4, _ssgiRawTexture);
     glBindTextureUnit(5, _ssgiFilteredTexture);
+    glBindTextureUnit(6, _ssgiTemporalTexture);
 
     glBindVertexArray(_fullscreenVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glCopyImageSubData(
+        _ssgiTemporalTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+        _ssgiHistoryTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+        _windowWidth, _windowHeight, 1);
+
+    _previousViewProjection = projection * view;
+    _hasHistory = true;
 }
 
 void ProjectApplication::CreateGBuffer(int width, int height)
@@ -585,18 +672,42 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::Text("Speed: %.3f", _camera.GetSpeed());
         ImGui::Text("Freecam (press F key to toggle): %s", _freecamEnabled ? "ON" : "OFF");
 		ImGui::SetWindowPos(ImVec2(0, 0));
-
         ImGui::Separator();
         ImGui::Text("Frame Time: %.3f ms", _cachedFrameTimeMs);
         ImGui::Text("FPS: %.1f", _cachedFPS);
         ImGui::Text("Average FPS (0.5s): %.1f", _cachedAverageFPS);
 
+		glm::vec3 c = _camera.GetUpVector();
         float editablePos[3] = { pos.x, pos.y, pos.z };
         if (ImGui::DragFloat3("Position", editablePos, 0.1f))
         {
             const glm::vec3 newPos(editablePos[0], editablePos[1], editablePos[2]);
             _camera.Set(newPos, newPos + _camera.GetForward(), _camera.GetUpVector());
         }
+		if (ImGui::Button("Camera Position 1"))
+        {   
+            _camera.Set(glm::vec3(-7.308f, 0.314f, -1.885f), glm::vec3(-8.357f, 0.0f, -2.666f), c);
+        }
+		ImGui::SameLine();
+        if (ImGui::Button("Camera Position 2"))
+        {
+            _camera.Set(glm::vec3(-4.942f, 3.804f, -2.875f), glm::vec3(-1.04f, 4.0f, -4.754f), c);
+        }
+		ImGui::SameLine();
+        if (ImGui::Button("Camera Position 3"))
+        {
+            _camera.Set(glm::vec3(-7.719f, 4.127f, -0.297f), glm::vec3(-6.647f, 3.467f, -0.297f), c);
+		}
+        if (ImGui::Button("Camera Position 4"))
+        {
+            _camera.Set(glm::vec3(0.557f, 2.084f, 0.877f), glm::vec3(0.364f, 2.136f, 1.33f), c);
+		}
+		ImGui::SameLine();
+        if (ImGui::Button("Camera Position 5"))
+        {
+            _camera.Set(glm::vec3(-0.52f, 0.022f, 0.294f), glm::vec3(-0.52f, 1.271f, -1.898f), c);
+		}
+
 
         ImGui::Separator();
         ImGui::Text("Deferred Debug View");
@@ -607,7 +718,8 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::RadioButton("Depth", &_debugView, 4);
         ImGui::RadioButton("World Position", &_debugView, 5);
         ImGui::RadioButton("SSGI Raw", &_debugView, 6);
-        ImGui::RadioButton("SSGI Filtered", &_debugView, 7);
+        ImGui::RadioButton("Spacial Filtered SSGI", &_debugView, 7);
+        ImGui::RadioButton("Temp. Accumulated SSGI", &_debugView, 8);
 
         ImGui::Separator();
         ImGui::Text("SSGI Controls");
@@ -621,6 +733,30 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::SliderInt("Blur Radius", &_blurRadius, 1, 4);
         ImGui::SliderFloat("Depth Strength", &_blurDepthStrength, 1.0f, 500.0f);
         ImGui::SliderFloat("Normal Power", &_blurNormalPower, 1.0f, 128.0f);
+        
+        ImGui::Separator();
+        ImGui::Text("Denoiser Mode");
+        ImGui::RadioButton("Raw", &_denoiserMode, 0);
+        ImGui::RadioButton("Fixed", &_denoiserMode, 1);
+        ImGui::RadioButton("Adaptive", &_denoiserMode, 2);
+
+        if (_denoiserMode == 2) // if adaptive mode is selected, show the additional controls for it
+        {
+            ImGui::Separator();
+            ImGui::Text("Adaptive Denoiser Controls");
+            ImGui::SliderFloat("Adaptive Depth Scale", &_adaptiveDepthScale, 1.0f, 2000.0f);
+            ImGui::SliderFloat("Adaptive Normal Scale", &_adaptiveNormalScale, 0.1f, 16.0f);
+		}
+
+        ImGui::Separator();
+        ImGui::Text("Temporal Accumulation");
+        ImGui::SliderFloat("Temporal Alpha", &_temporalAlpha, 0.0f, 0.99f);
+        ImGui::SliderFloat("Temporal Depth Threshold", &_temporalDepthThreshold, 0.0001f, 0.05f, "%.4f");
+        ImGui::SliderFloat("Temporal Normal Threshold", &_temporalNormalThreshold, 0.0f, 1.0f);
+        if (ImGui::Button("Reset Temporal History"))
+        {
+            _hasHistory = false;
+        }
 
         ImGui::End();
     }

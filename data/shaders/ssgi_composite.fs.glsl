@@ -6,8 +6,9 @@ layout (binding = 0) uniform sampler2D uGAlbedo;
 layout (binding = 1) uniform sampler2D uGNormal;
 layout (binding = 2) uniform sampler2D uGMaterial;
 layout (binding = 3) uniform sampler2D uGDepth;
-layout(binding = 4) uniform sampler2D uSsgiRaw;
-layout(binding = 5) uniform sampler2D uSsgiFiltered;
+layout (binding = 4) uniform sampler2D uSsgiRaw;
+layout (binding = 5) uniform sampler2D uSsgiFiltered;
+layout (binding = 6) uniform sampler2D uSsgiTemporal;
 
 layout (location = 0) uniform vec2 uScreenSize;
 layout (location = 1) uniform mat4 uInvProjection;
@@ -18,6 +19,7 @@ layout (location = 4) uniform vec3 uLightColor;
 layout (location = 5) uniform float uAmbientStrength;
 layout (location = 6) uniform vec3 uCameraPosition;
 layout (location = 7) uniform int uDebugView;
+layout (location = 8) uniform int uDenoiserMode;
 
 vec3 ReconstructWorldPosition(vec2 uv, float depth)
 {
@@ -39,6 +41,7 @@ void main()
     float depth = texture(uGDepth, uv).r;
     vec3 rawSsgi = texture(uSsgiRaw, uv).rgb;
     vec3 filteredSsgi = texture(uSsgiFiltered, uv).rgb;
+    vec3 temporalSsgi = texture(uSsgiTemporal, uv).rgb;
 
     if (depth >= 1.0)
     {
@@ -86,6 +89,11 @@ void main()
         oPixel = vec4(filteredSsgi, 1.0);
         return;
     }
+    if (uDebugView == 8)
+    {
+        oPixel = vec4(temporalSsgi, 1.0);
+        return;
+    }
 
     float roughness = material.r;
     float metallic = material.g;
@@ -106,9 +114,21 @@ void main()
     vec3 specularColor = mix(vec3(0.04), albedo, metallic);
     vec3 specular = spec * specularColor * uLightColor;
 
-    //oPixel = vec4(ambient + diffuse + specular, 1.0);
     vec3 direct = ambient + diffuse + specular;
-    vec3 indirect = texture(uSsgiFiltered, uv).rgb;
+    
+    vec3 indirect;
+    if (uDenoiserMode == 0)
+    {
+        indirect = texture(uSsgiRaw, uv).rgb;
+    }
+    else if (uDenoiserMode == 1)
+    {
+        indirect = texture(uSsgiFiltered, uv).rgb;
+    }
+    else
+    {
+        indirect = texture(uSsgiTemporal, uv).rgb;
+    }
     vec3 finalColor = direct + indirect * 0.5;
     oPixel = vec4(finalColor, 1.0);
 }
