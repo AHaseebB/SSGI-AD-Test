@@ -151,6 +151,14 @@ private:
     uint32_t _ssgiBlurProgram = 0;
     uint32_t _ssgiCompositeProgram = 0;
 
+    float _ssgiIntensity = 0.5f;
+    float _ssgiStepSize = 0.1f;
+    int _ssgiMaxSteps = 64;
+    float _ssgiThickness = 0.1f;
+    int _blurRadius = 2;
+    float _blurDepthStrength = 200.0f;
+    float _blurNormalPower = 32.0f;
+
     int _debugView = 0; // 0 = lit, 1 = albedo, 2 = normal, 3 = material, 4 = depth
 
 public:

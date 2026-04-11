@@ -14,9 +14,9 @@ layout (location = 3) uniform mat4 uView;
 layout (location = 4) uniform mat4 uInvView;
 layout (location = 5) uniform vec3 uCameraPosition;
 layout (location = 6) uniform float uSsgiIntensity;
-layout (location = 7) uniform vec3 uLightDirection;
-layout (location = 8) uniform vec3 uLightColor;
-layout (location = 9) uniform float uAmbientStrength;
+layout (location = 7) uniform float uStepSize;
+layout (location = 8) uniform int uMaxSteps;
+layout (location = 9) uniform float uThickness;
 
 vec3 ReconstructViewPosition(vec2 uv, float depth)
 {
@@ -60,9 +60,9 @@ void main()
     
     vec3 rayDir = normalize(normal + vec3(0.0, 0.2, 0.0)); // first-direction choice: normal-biased hemisphere
 
-    float stepSize = 0.1;
-    int maxSteps = 64;
-    float thickness = 0.1;
+    float stepSize = uStepSize;
+    int maxSteps = uMaxSteps;
+    float thickness = uThickness;
 
     bool hit = false;
     vec2 hitUV = vec2(0.0);

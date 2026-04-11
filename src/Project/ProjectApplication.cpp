@@ -401,7 +401,6 @@ void ProjectApplication::RenderScene(float)
     const glm::mat4 invProjection = glm::inverse(projection);
     const glm::mat4 invView = glm::inverse(view);
     const glm::vec3 cameraPosition = _camera.GetPosition();
-    const float ssgiIntensity = 0.5f;
 
     glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
     glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(projection));
@@ -409,12 +408,16 @@ void ProjectApplication::RenderScene(float)
     glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(4, 1, GL_FALSE, glm::value_ptr(invView));
     glUniform3fv(5, 1, glm::value_ptr(cameraPosition));
-    glUniform1f(6, ssgiIntensity);
+    glUniform1f(6, _ssgiIntensity);
+    glUniform1f(7, _ssgiStepSize);
+    glUniform1i(8, _ssgiMaxSteps);
+    glUniform1f(9, _ssgiThickness);
 
     glBindTextureUnit(0, _gAlbedoTexture);
     glBindTextureUnit(1, _gNormalTexture);
     glBindTextureUnit(2, _gMaterialTexture);
     glBindTextureUnit(3, _gDepthTexture);
+
     glBindVertexArray(_fullscreenVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
@@ -426,9 +429,13 @@ void ProjectApplication::RenderScene(float)
     glUseProgram(_ssgiBlurProgram);
 
     glUniform2f(0, 1.0f / static_cast<float>(_windowWidth), 1.0f / static_cast<float>(_windowHeight));
+    glUniform1i(1, _blurRadius);
+    glUniform1f(2, _blurDepthStrength);
+    glUniform1f(3, _blurNormalPower);
 
     glBindTextureUnit(0, _ssgiRawTexture);
     glBindTextureUnit(1, _gDepthTexture);
+    glBindTextureUnit(2, _gNormalTexture);
 
     glBindVertexArray(_fullscreenVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -601,6 +608,19 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::RadioButton("World Position", &_debugView, 5);
         ImGui::RadioButton("SSGI Raw", &_debugView, 6);
         ImGui::RadioButton("SSGI Filtered", &_debugView, 7);
+
+        ImGui::Separator();
+        ImGui::Text("SSGI Controls");
+        ImGui::SliderFloat("SSGI Intensity", &_ssgiIntensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("Step Size", &_ssgiStepSize, 0.01f, 0.2f);
+        ImGui::SliderInt("Max Steps", &_ssgiMaxSteps, 8, 256);
+        ImGui::SliderFloat("Thickness", &_ssgiThickness, 0.01f, 0.5f);
+
+        ImGui::Separator();
+        ImGui::Text("Denoiser Controls");
+        ImGui::SliderInt("Blur Radius", &_blurRadius, 1, 4);
+        ImGui::SliderFloat("Depth Strength", &_blurDepthStrength, 1.0f, 500.0f);
+        ImGui::SliderFloat("Normal Power", &_blurNormalPower, 1.0f, 128.0f);
 
         ImGui::End();
     }
