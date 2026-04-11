@@ -83,6 +83,24 @@ void main()
         return;
     }
 
-    vec3 accumulated = mix(current, history, uTemporalAlpha);
+    vec3 localMin = vec3(1e20);
+    vec3 localMax = vec3(-1e20);
+
+    vec2 texelSize = 1.0 / uScreenSize;
+
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            vec2 offset = vec2(x, y) * texelSize;
+            vec3 sampleColor = texture(uCurrentFiltered, uv + offset).rgb;
+
+            localMin = min(localMin, sampleColor);
+            localMax = max(localMax, sampleColor);
+        }
+    }
+
+    vec3 historyClamped = clamp(history, localMin, localMax);
+    vec3 accumulated = mix(current, historyClamped, uTemporalAlpha);
     oPixel = vec4(accumulated, 1.0);
 }
