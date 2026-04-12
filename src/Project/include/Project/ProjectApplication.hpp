@@ -108,6 +108,9 @@ protected:
     void DestroySsgiTargets();
     void CreateTemporalTargets(int width, int height);
     void DestroyTemporalTargets();
+    void CreateShadowMap();
+    void DestroyShadowMap();
+    glm::mat4 ComputeLightViewProjection(const glm::vec3& lightDirection) const;
 
 private:
     Model _cubes;
@@ -175,9 +178,24 @@ private:
     float _temporalAlpha = 0.7f;
     float _temporalDepthThreshold = 0.005f;
     float _temporalNormalThreshold = 0.9f;
+    bool _useAdaptiveTemporal = true;
+    bool _enableSsgi = true;
+    bool _enableSpatialFilter = true;
+    bool _enableTemporal = true;
 
-    int _debugView = 0; // 0 = lit, 1 = albedo, 2 = normal, 3 = material, 4 = depth
+    uint32_t _shadowProgram = 0;
+    uint32_t _shadowMapFbo = 0;
+    uint32_t _shadowMapTexture = 0;
+    int _shadowMapSize = 4096;
+    bool _enableShadows = true;
+    float _shadowBiasMin = 0.0008f;
+    float _shadowBiasMax = 0.0060f;
+    glm::mat4 _lightViewProjection = glm::mat4(1.0f);
+	glm::vec3 _lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
+    float _sceneRadius = 30.0f;
+	float _lightdistance = 30.0f;
+    int _debugView = 0; // 0 = final shaded result, 1 = albedo, 2 = normals, 3 = metallic/roughness, 4 = depth, 5 = world position, 6 = raw SSGI, 7 = spatial filtered SSGI, 8 = temporal accumulated SSGI
 
 public:
-    void OnFramebufferResized(int width, int height) override;
+	void OnFramebufferResized(int width, int height) override; // overridden to resize G-buffer and SSGI targets when the window is resized
 };

@@ -177,7 +177,7 @@ bool ProjectApplication::Load()
     _geometryProgram = MakeShader("./data/shaders/gbuffer.vs.glsl", "./data/shaders/gbuffer.fs.glsl");
     if (_geometryProgram == 0)
     {
-        return false;
+		return false; // we should probably have a more robust shader loading system that can report errors better than just returning 0, but for this demo this will do
     }
 
     _lightingProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/deferred_lighting.fs.glsl");
@@ -186,7 +186,7 @@ bool ProjectApplication::Load()
         return false;
     }
 
-    _ssgiGenerateProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_test.fs.glsl");
+    _ssgiGenerateProgram = MakeShader("./data/shaders/deferred_lighting.vs.glsl", "./data/shaders/ssgi_generate.fs.glsl");
     if (_ssgiGenerateProgram == 0)
     {
         return false;
@@ -207,10 +207,22 @@ bool ProjectApplication::Load()
     {
         return false;
     }
+    _shadowProgram = MakeShader("./data/shaders/shadow.vs.glsl", "./data/shaders/shadow.fs.glsl");
+    if (_shadowProgram == 0)
+    {
+        return false;
+    }
+    
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
 
     CreateGBuffer(_windowWidth, _windowHeight);
     CreateSsgiTargets(_windowWidth, _windowHeight);
     CreateTemporalTargets(_windowWidth, _windowHeight);
+    CreateShadowMap();
     CreateFullscreenTriangle();
 
     //LoadModel("./data/models/SM_Deccer_Cubes_Textured.gltf");
@@ -300,6 +312,77 @@ void ProjectApplication::DestroyTemporalTargets()
     _ssgiTemporalTexture = 0;
     _ssgiHistoryFbo = 0;
     _ssgiTemporalFbo = 0;
+}
+
+void ProjectApplication::CreateShadowMap()
+{
+    DestroyShadowMap();
+
+    glCreateFramebuffers(1, &_shadowMapFbo);
+
+    glCreateTextures(GL_TEXTURE_2D, 1, &_shadowMapTexture);
+    glTextureStorage2D(_shadowMapTexture, 1, GL_DEPTH_COMPONENT32F, _shadowMapSize, _shadowMapSize);
+
+    glTextureParameteri(_shadowMapTexture, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTextureParameteri(_shadowMapTexture, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+
+    // Needed for hardware depth comparison
+    glTextureParameteri(_shadowMapTexture, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTextureParameteri(_shadowMapTexture, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+
+    // Linear filtering helps hardware PCF interpolation
+    glTextureParameteri(_shadowMapTexture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(_shadowMapTexture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    const float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    glTextureParameterfv(_shadowMapTexture, GL_TEXTURE_BORDER_COLOR, borderColor);
+
+    glNamedFramebufferTexture(_shadowMapFbo, GL_DEPTH_ATTACHMENT, _shadowMapTexture, 0);
+    glNamedFramebufferDrawBuffer(_shadowMapFbo, GL_NONE);
+    glNamedFramebufferReadBuffer(_shadowMapFbo, GL_NONE);
+
+    if (glCheckNamedFramebufferStatus(_shadowMapFbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        spdlog::error("Shadow framebuffer is incomplete");
+    }
+}
+
+void ProjectApplication::DestroyShadowMap()
+{
+    if (_shadowMapTexture) glDeleteTextures(1, &_shadowMapTexture);
+    if (_shadowMapFbo) glDeleteFramebuffers(1, &_shadowMapFbo);
+
+    _shadowMapTexture = 0;
+    _shadowMapFbo = 0;
+}
+
+glm::mat4 ProjectApplication::ComputeLightViewProjection(const glm::vec3& lightDirection) const
+{
+    const glm::vec3 sceneCenter(0.0f, 5.0f, 0.0f);
+    const float sceneRadius = _sceneRadius;
+    const float lightDistance = _lightdistance;
+
+    const glm::vec3 dir = glm::normalize(lightDirection);
+
+    const glm::vec3 up =
+        (std::abs(glm::dot(dir, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.99f)
+        ? glm::vec3(0.0f, 0.0f, 1.0f)
+        : glm::vec3(0.0f, 1.0f, 0.0f);
+
+    const glm::vec3 lightPos = sceneCenter - dir * lightDistance;
+
+    const glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, up);
+
+    const float orthoExtent = sceneRadius;
+    const float nearPlane = 1.0f;
+    const float farPlane = lightDistance + sceneRadius * 2.0f;
+
+    const glm::mat4 lightProjection = glm::ortho(
+        -orthoExtent, orthoExtent,
+        -orthoExtent, orthoExtent,
+        nearPlane, farPlane);
+
+    return lightProjection * lightView;
 }
 
 void ProjectApplication::Update(float deltaTime)
@@ -399,7 +482,61 @@ void ProjectApplication::RenderScene(float)
 {
     const auto& projection = _camera.GetPerspectiveMatrix();
     const auto view = _camera.GetViewMatrix();
-    
+	const glm::vec3 lightDirection = _lightDirection;
+    _lightViewProjection = ComputeLightViewProjection(lightDirection);
+
+    if (_enableShadows)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, _shadowMapFbo);
+        glViewport(0, 0, _shadowMapSize, _shadowMapSize);
+        glClear(GL_DEPTH_BUFFER_BIT);
+
+        glEnable(GL_DEPTH_TEST);
+
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(2.0f, 4.0f);
+
+        glUseProgram(_shadowProgram);
+        glUniformMatrix4fv(0, 1, GL_FALSE, glm::value_ptr(_lightViewProjection));
+
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, _cubes.TransformData);
+        glBindVertexArray(_cubes.InputLayout);
+
+        for (const auto& batch : _renderBatches)
+        {
+            if (batch.Commands.empty())
+            {
+                continue;
+            }
+
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, batch.ObjectDataBuffer);
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, batch.CommandBuffer);
+
+            const uint32_t boundTextureCount = std::min<uint32_t>(
+                static_cast<uint32_t>(batch.TextureIndices.size()),
+                16u);
+
+            for (uint32_t offset = 0; offset < boundTextureCount; ++offset)
+            {
+                glUniform1i(1 + offset, offset);
+                glActiveTexture(GL_TEXTURE0 + offset);
+                glBindTexture(GL_TEXTURE_2D, _cubes.Textures[batch.TextureIndices[offset]]);
+            }
+
+            glMultiDrawElementsIndirect(
+                GL_TRIANGLES,
+                GL_UNSIGNED_INT,
+                nullptr,
+                static_cast<GLsizei>(batch.Commands.size()),
+                sizeof(MeshIndirectInfo));
+        }
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    }
+
     // Geometry pass
     glBindFramebuffer(GL_FRAMEBUFFER, _gBufferFbo);
     glViewport(0, 0, _windowWidth, _windowHeight);
@@ -441,81 +578,109 @@ void ProjectApplication::RenderScene(float)
             sizeof(MeshIndirectInfo));
     }
 
-    // generate pass
-    glBindFramebuffer(GL_FRAMEBUFFER, _ssgiRawFbo);
-    glViewport(0, 0, _windowWidth, _windowHeight);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glUseProgram(_ssgiGenerateProgram);
-
     const glm::mat4 invProjection = glm::inverse(projection);
     const glm::mat4 invView = glm::inverse(view);
     const glm::vec3 cameraPosition = _camera.GetPosition();
 
-    glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
-    glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(projection));
-    glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invProjection));
-    glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(4, 1, GL_FALSE, glm::value_ptr(invView));
-    glUniform3fv(5, 1, glm::value_ptr(cameraPosition));
-    glUniform1f(6, _ssgiIntensity);
-    glUniform1f(7, _ssgiStepSize);
-    glUniform1i(8, _ssgiMaxSteps);
-    glUniform1f(9, _ssgiThickness);
+    if (_enableSsgi)
+    {
+        // generate pass
+        glBindFramebuffer(GL_FRAMEBUFFER, _ssgiRawFbo);
+        glViewport(0, 0, _windowWidth, _windowHeight);
+        glClear(GL_COLOR_BUFFER_BIT);
 
-    glBindTextureUnit(0, _gAlbedoTexture);
-    glBindTextureUnit(1, _gNormalTexture);
-    glBindTextureUnit(2, _gMaterialTexture);
-    glBindTextureUnit(3, _gDepthTexture);
+        glUseProgram(_ssgiGenerateProgram);
 
-    glBindVertexArray(_fullscreenVao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+        glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+        glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(projection));
+        glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invProjection));
+        glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(4, 1, GL_FALSE, glm::value_ptr(invView));
+        glUniform3fv(5, 1, glm::value_ptr(cameraPosition));
+        glUniform1f(6, _ssgiIntensity);
+        glUniform1f(7, _ssgiStepSize);
+        glUniform1i(8, _ssgiMaxSteps);
+        glUniform1f(9, _ssgiThickness);
 
-	// blur pass
-    glBindFramebuffer(GL_FRAMEBUFFER, _ssgiFilteredFbo);
-    glViewport(0, 0, _windowWidth, _windowHeight);
-    glClear(GL_COLOR_BUFFER_BIT);
+        glBindTextureUnit(0, _gAlbedoTexture);
+        glBindTextureUnit(1, _gNormalTexture);
+        glBindTextureUnit(2, _gMaterialTexture);
+        glBindTextureUnit(3, _gDepthTexture);
 
-    glUseProgram(_ssgiBlurProgram);
+        glBindVertexArray(_fullscreenVao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    glUniform2f(0, 1.0f / static_cast<float>(_windowWidth), 1.0f / static_cast<float>(_windowHeight));
-    glUniform1i(1, _blurRadius);
-    glUniform1f(2, _blurDepthStrength);
-    glUniform1f(3, _blurNormalPower);
-    glUniform1i(4, _denoiserMode);
-    glUniform1f(5, _adaptiveDepthScale);
-    glUniform1f(6, _adaptiveNormalScale);
+        if (_enableSpatialFilter)
+        {
+            // blur pass
+            glBindFramebuffer(GL_FRAMEBUFFER, _ssgiFilteredFbo);
+            glViewport(0, 0, _windowWidth, _windowHeight);
+            glClear(GL_COLOR_BUFFER_BIT);
 
-    glBindTextureUnit(0, _ssgiRawTexture);
-    glBindTextureUnit(1, _gDepthTexture);
-    glBindTextureUnit(2, _gNormalTexture);
+            glUseProgram(_ssgiBlurProgram);
 
-    glBindVertexArray(_fullscreenVao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+            glUniform2f(0, 1.0f / static_cast<float>(_windowWidth), 1.0f / static_cast<float>(_windowHeight));
+            glUniform1i(1, _blurRadius);
+            glUniform1f(2, _blurDepthStrength);
+            glUniform1f(3, _blurNormalPower);
+            glUniform1i(4, _denoiserMode);
+            glUniform1f(5, _adaptiveDepthScale);
+            glUniform1f(6, _adaptiveNormalScale);
 
-    // temporal pass
-    glBindFramebuffer(GL_FRAMEBUFFER, _ssgiTemporalFbo);
-    glViewport(0, 0, _windowWidth, _windowHeight);
-    glClear(GL_COLOR_BUFFER_BIT);
+            glBindTextureUnit(0, _ssgiRawTexture);
+            glBindTextureUnit(1, _gDepthTexture);
+            glBindTextureUnit(2, _gNormalTexture);
 
-    glUseProgram(_ssgiTemporalProgram);
+            glBindVertexArray(_fullscreenVao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
-    glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
-    glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
-    glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(_previousViewProjection));
-    glUniform1f(4, _temporalAlpha);
-    glUniform1f(5, _temporalDepthThreshold);
-    glUniform1f(6, _temporalNormalThreshold);
-    glUniform1i(7, _hasHistory ? 1 : 0);
+            if (_enableTemporal)
+            {
+                // temporal pass
+                glBindFramebuffer(GL_FRAMEBUFFER, _ssgiTemporalFbo);
+                glViewport(0, 0, _windowWidth, _windowHeight);
+                glClear(GL_COLOR_BUFFER_BIT);
 
-    glBindTextureUnit(0, _ssgiFilteredTexture);
-    glBindTextureUnit(1, _ssgiHistoryTexture);
-    glBindTextureUnit(2, _gDepthTexture);
-    glBindTextureUnit(3, _gNormalTexture);
+                glUseProgram(_ssgiTemporalProgram);
 
-    glBindVertexArray(_fullscreenVao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+                glUniform2f(0, static_cast<float>(_windowWidth), static_cast<float>(_windowHeight));
+                glUniformMatrix4fv(1, 1, GL_FALSE, glm::value_ptr(invProjection));
+                glUniformMatrix4fv(2, 1, GL_FALSE, glm::value_ptr(invView));
+                glUniformMatrix4fv(3, 1, GL_FALSE, glm::value_ptr(_previousViewProjection));
+                glUniform1f(4, _temporalAlpha);
+                glUniform1f(5, _temporalDepthThreshold);
+                glUniform1f(6, _temporalNormalThreshold);
+                glUniform1i(7, _hasHistory ? 1 : 0);
+                glUniform1i(8, _useAdaptiveTemporal ? 1 : 0);
+
+                glBindTextureUnit(0, _ssgiFilteredTexture);
+                glBindTextureUnit(1, _ssgiHistoryTexture);
+                glBindTextureUnit(2, _gDepthTexture);
+                glBindTextureUnit(3, _gNormalTexture);
+
+                glBindVertexArray(_fullscreenVao);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+            }
+        }
+    }
+
+    uint32_t indirectTexture = 0;
+    if (!_enableSsgi)
+    {
+        indirectTexture = 0;
+    }
+    else if (_enableTemporal && _enableSpatialFilter)
+    {
+        indirectTexture = _ssgiTemporalTexture;
+    }
+    else if (_enableSpatialFilter)
+    {
+        indirectTexture = _ssgiFilteredTexture;
+    }
+    else
+    {
+        indirectTexture = _ssgiRawTexture;
+    }
 
 	// composite pass
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -524,7 +689,6 @@ void ProjectApplication::RenderScene(float)
 
     glUseProgram(_ssgiCompositeProgram);
 
-    const glm::vec3 lightDirection = glm::normalize(glm::vec3(-0.6f, -1.0f, -0.4f));
     const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
     const float ambientStrength = 0.1f;
     const glm::vec3 cameraPosition2 = _camera.GetPosition();
@@ -538,6 +702,11 @@ void ProjectApplication::RenderScene(float)
     glUniform3fv(6, 1, glm::value_ptr(cameraPosition2));
     glUniform1i(7, _debugView);
     glUniform1i(8, _denoiserMode);
+    glUniform1i(9, _enableSsgi ? 1 : 0);
+    glUniformMatrix4fv(10, 1, GL_FALSE, glm::value_ptr(_lightViewProjection));
+    glUniform1i(11, _enableShadows ? 1 : 0);
+    glUniform1f(12, _shadowBiasMin);
+    glUniform1f(13, _shadowBiasMax);
 
     glBindTextureUnit(0, _gAlbedoTexture);
     glBindTextureUnit(1, _gNormalTexture);
@@ -546,17 +715,26 @@ void ProjectApplication::RenderScene(float)
     glBindTextureUnit(4, _ssgiRawTexture);
     glBindTextureUnit(5, _ssgiFilteredTexture);
     glBindTextureUnit(6, _ssgiTemporalTexture);
+    glBindTextureUnit(7, indirectTexture);
+    glBindTextureUnit(8, _shadowMapTexture);
 
     glBindVertexArray(_fullscreenVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    glCopyImageSubData(
-        _ssgiTemporalTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
-        _ssgiHistoryTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
-        _windowWidth, _windowHeight, 1);
+	if (_enableSsgi && _enableSpatialFilter && _enableTemporal) // if we have generated a new temporal result, we copy it to the history texture for use in the next frame's temporal reprojection
+    {
+        glCopyImageSubData(
+            _ssgiTemporalTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+            _ssgiHistoryTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+            _windowWidth, _windowHeight, 1);
 
-    _previousViewProjection = projection * view;
-    _hasHistory = true;
+        _previousViewProjection = projection * view;
+        _hasHistory = true;
+    }
+    else
+    {
+		_hasHistory = false;
+    }
 }
 
 void ProjectApplication::CreateGBuffer(int width, int height)
@@ -653,10 +831,9 @@ void ProjectApplication::RenderUI(float deltaTime)
 
     ImGui::Begin("Window");
     {
-        ImGui::TextUnformatted("Hello World!");
         ImGui::Text("Time in seconds since startup: %f", _elapsedTime);
         ImGui::Text("The delta time between frames: %f", deltaTime);
-    
+
         const glm::vec3 pos = _camera.GetPosition();
         const glm::vec3 view = _camera.GetView();
         const glm::vec3 forward = _camera.GetForward();
@@ -671,43 +848,48 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::Separator();
         ImGui::Text("Speed: %.3f", _camera.GetSpeed());
         ImGui::Text("Freecam (press F key to toggle): %s", _freecamEnabled ? "ON" : "OFF");
-		ImGui::SetWindowPos(ImVec2(0, 0));
+        ImGui::SetWindowPos(ImVec2(0, 0));
         ImGui::Separator();
         ImGui::Text("Frame Time: %.3f ms", _cachedFrameTimeMs);
         ImGui::Text("FPS: %.1f", _cachedFPS);
         ImGui::Text("Average FPS (0.5s): %.1f", _cachedAverageFPS);
 
-		glm::vec3 c = _camera.GetUpVector();
+        glm::vec3 c = _camera.GetUpVector();
         float editablePos[3] = { pos.x, pos.y, pos.z };
         if (ImGui::DragFloat3("Position", editablePos, 0.1f))
         {
             const glm::vec3 newPos(editablePos[0], editablePos[1], editablePos[2]);
             _camera.Set(newPos, newPos + _camera.GetForward(), _camera.GetUpVector());
         }
-		if (ImGui::Button("Camera Position 1"))
-        {   
+        if (ImGui::Button("Camera Position 1"))
+        {
             _camera.Set(glm::vec3(-7.308f, 0.314f, -1.885f), glm::vec3(-8.357f, 0.0f, -2.666f), c);
         }
-		ImGui::SameLine();
+        ImGui::SameLine();
         if (ImGui::Button("Camera Position 2"))
         {
             _camera.Set(glm::vec3(-4.942f, 3.804f, -2.875f), glm::vec3(-1.04f, 4.0f, -4.754f), c);
         }
-		ImGui::SameLine();
+        ImGui::SameLine();
         if (ImGui::Button("Camera Position 3"))
         {
             _camera.Set(glm::vec3(-7.719f, 4.127f, -0.297f), glm::vec3(-6.647f, 3.467f, -0.297f), c);
-		}
+        }
         if (ImGui::Button("Camera Position 4"))
         {
             _camera.Set(glm::vec3(0.557f, 2.084f, 0.877f), glm::vec3(0.364f, 2.136f, 1.33f), c);
-		}
-		ImGui::SameLine();
+        }
+        ImGui::SameLine();
         if (ImGui::Button("Camera Position 5"))
         {
             _camera.Set(glm::vec3(-0.52f, 0.022f, 0.294f), glm::vec3(-0.52f, 1.271f, -1.898f), c);
-		}
+        }
 
+        ImGui::Separator();
+        ImGui::Text("Pipeline Toggles");
+        ImGui::Checkbox("Enable SSGI", &_enableSsgi);
+        ImGui::Checkbox("Enable Spatial Filter", &_enableSpatialFilter);
+        ImGui::Checkbox("Enable Temporal", &_enableTemporal);
 
         ImGui::Separator();
         ImGui::Text("Deferred Debug View");
@@ -717,46 +899,59 @@ void ProjectApplication::RenderUI(float deltaTime)
         ImGui::RadioButton("Material", &_debugView, 3);
         ImGui::RadioButton("Depth", &_debugView, 4);
         ImGui::RadioButton("World Position", &_debugView, 5);
-        ImGui::RadioButton("SSGI Raw", &_debugView, 6);
-        ImGui::RadioButton("Spacial Filtered SSGI", &_debugView, 7);
-        ImGui::RadioButton("Temp. Accumulated SSGI", &_debugView, 8);
+        ImGui::RadioButton("Shadow Factor", &_debugView, 9);
 
-        ImGui::Separator();
-        ImGui::Text("SSGI Controls");
-        ImGui::SliderFloat("SSGI Intensity", &_ssgiIntensity, 0.0f, 2.0f);
-        ImGui::SliderFloat("Step Size", &_ssgiStepSize, 0.01f, 0.2f);
-        ImGui::SliderInt("Max Steps", &_ssgiMaxSteps, 8, 256);
-        ImGui::SliderFloat("Thickness", &_ssgiThickness, 0.01f, 0.5f);
-
-        ImGui::Separator();
-        ImGui::Text("Denoiser Controls");
-        ImGui::SliderInt("Blur Radius", &_blurRadius, 1, 4);
-        ImGui::SliderFloat("Depth Strength", &_blurDepthStrength, 1.0f, 500.0f);
-        ImGui::SliderFloat("Normal Power", &_blurNormalPower, 1.0f, 128.0f);
+        if (_enableSsgi) {
+            ImGui::RadioButton("SSGI Raw", &_debugView, 6);
+            ImGui::RadioButton("Spacial Filtered SSGI", &_debugView, 7);
+            ImGui::RadioButton("Temp. Accumulated SSGI", &_debugView, 8);
         
-        ImGui::Separator();
-        ImGui::Text("Denoiser Mode");
-        ImGui::RadioButton("Raw", &_denoiserMode, 0);
-        ImGui::RadioButton("Fixed", &_denoiserMode, 1);
-        ImGui::RadioButton("Adaptive", &_denoiserMode, 2);
-
-        if (_denoiserMode == 2) // if adaptive mode is selected, show the additional controls for it
-        {
             ImGui::Separator();
-            ImGui::Text("Adaptive Denoiser Controls");
-            ImGui::SliderFloat("Adaptive Depth Scale", &_adaptiveDepthScale, 1.0f, 2000.0f);
-            ImGui::SliderFloat("Adaptive Normal Scale", &_adaptiveNormalScale, 0.1f, 16.0f);
-		}
+            ImGui::Text("SSGI Controls");
+            ImGui::SliderFloat("SSGI Intensity", &_ssgiIntensity, 0.0f, 2.0f);
+            ImGui::SliderFloat("Step Size", &_ssgiStepSize, 0.01f, 0.2f);
+            ImGui::SliderInt("Max Steps", &_ssgiMaxSteps, 8, 256);
+            ImGui::SliderFloat("Thickness", &_ssgiThickness, 0.01f, 0.5f);
 
-        ImGui::Separator();
-        ImGui::Text("Temporal Accumulation");
-        ImGui::SliderFloat("Temporal Alpha", &_temporalAlpha, 0.0f, 0.99f);
-        ImGui::SliderFloat("Temporal Depth Threshold", &_temporalDepthThreshold, 0.0001f, 0.05f, "%.4f");
-        ImGui::SliderFloat("Temporal Normal Threshold", &_temporalNormalThreshold, 0.0f, 1.0f);
-        if (ImGui::Button("Reset Temporal History"))
-        {
-            _hasHistory = false;
+            ImGui::Separator();
+            ImGui::Text("Denoiser Controls");
+            ImGui::SliderInt("Blur Radius", &_blurRadius, 1, 4);
+            ImGui::SliderFloat("Depth Strength", &_blurDepthStrength, 1.0f, 500.0f);
+            ImGui::SliderFloat("Normal Power", &_blurNormalPower, 1.0f, 128.0f);
+
+            ImGui::Separator();
+            ImGui::Text("Denoiser Mode");
+            ImGui::RadioButton("Raw", &_denoiserMode, 0);
+            ImGui::RadioButton("Fixed", &_denoiserMode, 1);
+            ImGui::RadioButton("Adaptive", &_denoiserMode, 2);
+
+            if (_denoiserMode == 2) // if adaptive mode is selected, show the additional controls for it
+            {
+                ImGui::Separator();
+                ImGui::Text("Adaptive Denoiser Controls");
+                ImGui::SliderFloat("Adaptive Depth Scale", &_adaptiveDepthScale, 1.0f, 2000.0f);
+                ImGui::SliderFloat("Adaptive Normal Scale", &_adaptiveNormalScale, 0.1f, 16.0f);
+            }
+
+            ImGui::Separator();
+            ImGui::Text("Temporal Accumulation");
+            ImGui::SliderFloat("Temporal Alpha", &_temporalAlpha, 0.0f, 0.99f);
+            ImGui::SliderFloat("Temporal Depth Threshold", &_temporalDepthThreshold, 0.0001f, 0.05f, "%.4f");
+            ImGui::SliderFloat("Temporal Normal Threshold", &_temporalNormalThreshold, 0.0f, 1.0f);
+            ImGui::Checkbox("Use Adaptive Temporal", &_useAdaptiveTemporal);
+            ImGui::SameLine();
+            if (ImGui::Button("Reset Temporal History"))
+            {
+                _hasHistory = false;
+            }
         }
+
+        ImGui::Checkbox("Enable Shadows", &_enableShadows);
+        ImGui::SliderFloat("Shadow Bias Min", &_shadowBiasMin, 0.0001f, 0.01f, "%.4f");
+        ImGui::SliderFloat("Shadow Bias Max", &_shadowBiasMax, 0.0005f, 0.05f, "%.4f");
+		ImGui::SliderFloat("Scene Radius", &_sceneRadius, 1.0f, 70.0f);
+		ImGui::SliderFloat("Light Distance", &_lightdistance, 1.0f, 200.0f);
+		ImGui::DragFloat3("Light Direction", glm::value_ptr(_lightDirection), 0.01f);
 
         ImGui::End();
     }
@@ -1026,11 +1221,11 @@ void ProjectApplication::LoadModel(std::string_view file)
                 }
 
                 std::string metallicRoughnessURI = "";
-                float metallicFactor = 1.0f;
+                float metallicFactor = 5.0f;
                 float roughnessFactor = 1.0f;
                 if (primitive.material && primitive.material->has_pbr_metallic_roughness)
                 {
-                    metallicFactor = primitive.material->pbr_metallic_roughness.metallic_factor;
+					//metallicFactor = primitive.material->pbr_metallic_roughness.metallic_factor; // using 5.0f as a default metallic factor to improve ssgi visibility
                     roughnessFactor = primitive.material->pbr_metallic_roughness.roughness_factor;
 					//spdlog::info("1: metallic factor = {}, roughness factor = {}", metallicFactor, roughnessFactor);
                     if (primitive.material && primitive.material->pbr_metallic_roughness.metallic_roughness_texture.texture != nullptr)
