@@ -77,7 +77,7 @@ float ComputeShadow(vec3 worldPos, vec3 N, vec3 L)
         }
     }
 
-    return visibility / 9.0;
+    return visibility / 25.0;
 }
 
 void main()

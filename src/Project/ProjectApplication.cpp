@@ -484,6 +484,7 @@ void ProjectApplication::RenderScene(float)
     const auto view = _camera.GetViewMatrix();
 	const glm::vec3 lightDirection = _lightDirection;
     _lightViewProjection = ComputeLightViewProjection(lightDirection);
+    const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
 
     if (_enableShadows)
     {
@@ -601,6 +602,8 @@ void ProjectApplication::RenderScene(float)
         glUniform1f(7, _ssgiStepSize);
         glUniform1i(8, _ssgiMaxSteps);
         glUniform1f(9, _ssgiThickness);
+        glUniform3fv(10, 1, glm::value_ptr(lightDirection));
+        glUniform3fv(11, 1, glm::value_ptr(lightColor));
 
         glBindTextureUnit(0, _gAlbedoTexture);
         glBindTextureUnit(1, _gNormalTexture);
@@ -689,7 +692,6 @@ void ProjectApplication::RenderScene(float)
 
     glUseProgram(_ssgiCompositeProgram);
 
-    const glm::vec3 lightColor(1.0f, 1.0f, 1.0f);
     const float ambientStrength = 0.1f;
     const glm::vec3 cameraPosition2 = _camera.GetPosition();
 

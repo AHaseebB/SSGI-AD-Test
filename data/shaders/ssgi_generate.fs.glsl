@@ -17,6 +17,8 @@ layout (location = 6) uniform float uSsgiIntensity;
 layout (location = 7) uniform float uStepSize;
 layout (location = 8) uniform int uMaxSteps;
 layout (location = 9) uniform float uThickness;
+layout (location = 10) uniform vec3 uLightDirection;
+layout (location = 11) uniform vec3 uLightColor;
 
 vec3 ReconstructViewPosition(vec2 uv, float depth) // This function reconstructs the view space position from screen UV and depth, which is a common step in screen-space effects to get the actual 3D position corresponding to a pixel
 {
@@ -106,14 +108,19 @@ void main()
     vec3 hitAlbedo = texture(uGAlbedo, hitUV).rgb;
     vec3 hitNormal = texture(uGNormal, hitUV).rgb * 2.0 - 1.0;
     hitNormal = normalize(hitNormal);
-    vec3 toHit = normalize(hitPos - worldPos);
 
-    float NdotL0 = max(dot(normal, toHit), 0.0);
-    float NdotL1 = max(dot(hitNormal, -toHit), 0.0);
+    vec3 toHit = normalize(hitPos - worldPos);
+    vec3 L = normalize(-uLightDirection);
+
+    float receiverCosine = max(dot(normal, toHit), 0.0);
+    float emitterLight = max(dot(hitNormal, L), 0.0);
 
     float hitDistance = length(hitPos - worldPos);
     float attenuation = 1.0 / (1.0 + hitDistance * hitDistance);
-    vec3 indirect = hitAlbedo * NdotL0 * NdotL1 * attenuation; // Simple diffuse-like contribution modulated by the angle between the original normal and the direction to the hit point, as well as the angle between the hit normal and the incoming direction, and attenuated by distance to avoid overly strong contributions from far hits
+
+    vec3 hitRadiance = hitAlbedo * uLightColor * emitterLight;
+    vec3 indirect = hitRadiance * receiverCosine * attenuation;
+
     indirect = min(indirect, vec3(0.5));
     oPixel = vec4(indirect * uSsgiIntensity, 1.0);
 }
